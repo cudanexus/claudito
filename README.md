@@ -1,89 +1,239 @@
 # Claudito
 
-A Claude Code autonomous agent manager that allows running and monitoring multiple Claude agents across different projects.
+[![npm version](https://badge.fury.io/js/claudito.svg)](https://www.npmjs.com/package/claudito)
+[![CI](https://github.com/anthropics/claudito/actions/workflows/ci.yml/badge.svg)](https://github.com/anthropics/claudito/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
+A web-based manager for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents. Run and monitor multiple Claude agents across different projects with a modern UI.
 
-### Agent Modes
-- **Interactive Mode** (default): Chat with Claude in real-time. Agent auto-starts when you send your first message.
-- **Autonomous Mode**: Runs through ROADMAP.md milestones automatically with manual start.
+![Claudito Screenshot](doc/images/preview-01.png)
 
-### Core Features
-- **Multi-Project Management**: Add, manage, and delete projects with Claude Code agents
-- **Concurrent Execution**: Run multiple agents simultaneously with configurable limits
-- **Queue System**: Automatic queuing when at max capacity, agents start when slots free up
-- **Live Conversation Streaming**: Real-time WebSocket updates for agent output
-- **Roadmap Integration**: Parse and display ROADMAP.md progress, generate via Claude
+## Quick Start
 
-### UI Features
-- **Tabbed Interface**: Switch between Agent Output and Project Files views
-- **File Browser & Editor**: Browse, view, and edit project files with live syntax highlighting (30+ languages)
-- **Configurable Keybindings**: Choose between Ctrl+Enter or Enter to send messages
-- **Tool Visualization**: See Claude's tool usage with icons, arguments, and code diffs
-- **Context Usage Monitor**: View token usage, cache statistics, and context window utilization
-- **Claude Files Editor**: View and edit CLAUDE.md files (global and project-specific)
-- **Font Size Controls**: Adjust text size for the entire project view (conversation, tools, modals) with +/- buttons
-- **Real-time Stats**: Live updates for duration, message count, tool calls, and total tokens used
-- **Roadmap Task Selection**: Select milestones or tasks to run, auto-generates prompts and sends to agent
+```bash
+# Run directly with npx (no installation required)
+npx claudito
 
-### Additional Features
-- **Resource Monitoring**: View running and queued agent counts in real-time
-- **Global Settings**: Configure max concurrent agents and Claude permissions from UI
-- **Comprehensive Logging**: Configurable log levels (debug, info, warn, error)
-- **Error Handling**: User-friendly error messages with structured error responses
-- **All assets served locally** (no CDN dependencies)
+# Or install globally
+npm install -g claudito
+claudito
+```
+
+Open your browser at **http://localhost:3000** to access the web UI.
+
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Features](#features)
+- [Configuration](#configuration)
+- [Data Storage](#data-storage)
+- [API Reference](#api-reference)
+- [Development](#development)
+- [Testing the Package Locally](#testing-the-package-locally)
+- [License](#license)
 
 ## Requirements
 
-- Node.js 18+
-- npm or yarn
+| Requirement | Version |
+|-------------|---------|
+| **Node.js** | 18.0.0 or higher |
+| **Claude Code CLI** | Latest version |
+
+### Installing Claude Code CLI
+
+Before using Claudito, ensure you have the Claude Code CLI installed and configured:
+
+```bash
+# Install Claude Code CLI (if not already installed)
+npm install -g @anthropic-ai/claude-code
+
+# Verify installation
+claude --version
+
+# Configure your API key (first time only)
+claude auth
+```
+
+For more details, see the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code).
 
 ## Installation
 
+### Option 1: Run with npx (Recommended)
+
+No installation required. Run directly:
+
 ```bash
-npm install
+npx claudito
+```
+
+This downloads and runs the latest version automatically.
+
+### Option 2: Global Installation
+
+Install once, run anywhere:
+
+```bash
+npm install -g claudito
+claudito
+```
+
+### Option 3: Local Installation
+
+For development or integration into a project:
+
+```bash
+npm install claudito
+npx claudito
 ```
 
 ## Usage
 
-### Development
+### Basic Usage
 
 ```bash
-npm run dev
+# Start with defaults (localhost:3000)
+claudito
+
+# Specify a custom port
+claudito --port 8080
+claudito -p 8080
+
+# Listen on all network interfaces
+claudito --host 0.0.0.0
+
+# Combine options
+claudito -p 8080 --host 0.0.0.0
 ```
 
-Server starts at `http://localhost:3000` by default.
+### CLI Options
 
-### Production
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--port <port>` | `-p` | Server port | `3000` |
+| `--host <host>` | `-h` | Server host | `localhost` |
+| `--version` | `-v` | Show version number | - |
+| `--help` | - | Show help message | - |
+
+### Environment Variables
+
+All options can also be set via environment variables:
 
 ```bash
-npm run build
-npm start
+# Linux/macOS
+PORT=8080 HOST=0.0.0.0 LOG_LEVEL=debug claudito
+
+# Windows (PowerShell)
+$env:PORT=8080; $env:HOST="0.0.0.0"; claudito
+
+# Windows (CMD)
+set PORT=8080 && set HOST=0.0.0.0 && claudito
 ```
-
-## Data Storage
-
-All application data is stored in `~/.claudito/`:
-
-| File | Description |
-|------|-------------|
-| `projects.json` | List of projects and their metadata |
-| `settings.json` | Global application settings |
-| `conversations/*.json` | Conversation history for each project |
-
-## Configuration
-
-Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Server port |
 | `HOST` | `localhost` | Server host |
-| `NODE_ENV` | `development` | Environment (development/production/test) |
+| `NODE_ENV` | `development` | Environment mode |
 | `LOG_LEVEL` | `info` | Log level (debug/info/warn/error) |
-| `MAX_CONCURRENT_AGENTS` | `3` | Maximum concurrent agents (queued when exceeded) |
+| `MAX_CONCURRENT_AGENTS` | `3` | Maximum concurrent agents |
 
-## API Endpoints
+## Features
+
+### Agent Modes
+
+#### Interactive Mode (Default)
+Chat with Claude in real-time. The agent auto-starts when you send your first message.
+
+- Real-time streaming of Claude's responses
+- See tool usage as it happens (file reads, edits, bash commands)
+- Code diffs with syntax highlighting
+- Send follow-up messages naturally
+
+#### Autonomous Mode
+Runs through ROADMAP.md milestones automatically.
+
+- Parse and display ROADMAP.md structure
+- Generate roadmaps via Claude
+- Execute tasks sequentially
+- Track completion status
+
+### Project Management
+
+- **Add Projects**: Point to any directory with a codebase
+- **Multi-Project Support**: Manage multiple projects simultaneously
+- **Concurrent Execution**: Run multiple agents at once (configurable limit)
+- **Queue System**: Automatic queuing when at max capacity
+
+### User Interface
+
+| Feature | Description |
+|---------|-------------|
+| **Tabbed Interface** | Switch between Agent Output and Project Files |
+| **File Browser** | Browse, view, and edit project files |
+| **Syntax Highlighting** | 30+ languages supported via highlight.js |
+| **Tool Visualization** | See Claude's tool usage with icons and arguments |
+| **Code Diffs** | Side-by-side diff view for file changes |
+| **Context Monitor** | View token usage and context window utilization |
+| **Font Controls** | Adjust text size with +/- buttons |
+| **Keyboard Shortcuts** | Configurable keybindings (Ctrl+Enter or Enter to send) |
+
+### Real-time Features
+
+- **Live Streaming**: WebSocket-based real-time updates
+- **Conversation Stats**: Duration, message count, tool calls, tokens
+- **Resource Monitor**: Running and queued agent counts
+- **Context Usage**: Token usage persisted even when agent is stopped
+
+### Additional Features
+
+- **CLAUDE.md Editor**: Edit global and project-specific CLAUDE.md files
+- **Conversation History**: Browse and restore previous conversations
+- **Debug Panel**: View logs, process info, and troubleshoot issues
+- **Offline Ready**: All assets served locally (no CDN dependencies)
+
+## Configuration
+
+### Global Settings
+
+Access settings via the gear icon in the UI sidebar.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `maxConcurrentAgents` | Maximum simultaneous agents (1-10) | `3` |
+| `dangerouslySkipPermissions` | Skip Claude permission prompts | `true` |
+| `sendWithCtrlEnter` | Ctrl+Enter sends (true) or Enter sends (false) | `true` |
+| `historyLimit` | Max conversations in history | `25` |
+| `agentPromptTemplate` | Template for autonomous mode instructions | (see below) |
+
+### Agent Prompt Template
+
+Customize how instructions are given to agents in autonomous mode. Available variables:
+
+- `${var:project-name}` - Project name
+- `${var:phase-title}` - Current phase from ROADMAP.md
+- `${var:milestone-title}` - Current milestone title
+- `${var:milestone-item}` - Specific task to work on
+
+## Data Storage
+
+All data is stored locally in your home directory:
+
+```
+~/.claudito/
+├── projects/
+│   └── index.json          # Project registry
+├── settings.json           # Global settings
+└── pids.json              # Active process tracking
+
+{project-root}/.claudito/
+├── status.json            # Project status
+└── conversations/
+    └── {id}.json          # Conversation history
+```
+
+## API Reference
 
 ### Health Check
 
@@ -91,122 +241,260 @@ Environment variables:
 GET /api/health
 ```
 
-Returns server health status.
-
-### Agent Resource Status
-
-```
-GET /api/agents/status
-```
-
-Returns current agent resource status:
-```json
-{
-  "runningCount": 2,
-  "maxConcurrent": 3,
-  "queuedCount": 1,
-  "queuedProjects": [{ "projectId": "abc123", "queuedAt": "2024-01-01T00:00:00Z" }]
-}
-```
-
 ### Projects
 
 ```
-GET /api/projects              # List all projects
-POST /api/projects             # Create project
-GET /api/projects/:id          # Get project details
-DELETE /api/projects/:id       # Delete project
+GET    /api/projects              # List all projects
+POST   /api/projects              # Create project
+GET    /api/projects/:id          # Get project details
+DELETE /api/projects/:id          # Delete project
 ```
 
 ### Agent Control
 
 ```
-POST /api/projects/:id/agent/start   # Start agent (queues if at capacity)
-POST /api/projects/:id/agent/stop    # Stop agent
-GET /api/projects/:id/agent/status   # Get agent status
-GET /api/projects/:id/agent/context  # Get context usage (tokens, cache stats)
-DELETE /api/projects/:id/agent/queue # Remove from queue
+POST   /api/projects/:id/agent/start       # Start agent
+POST   /api/projects/:id/agent/stop        # Stop agent
+POST   /api/projects/:id/agent/send        # Send message
+GET    /api/projects/:id/agent/status      # Get status
+GET    /api/projects/:id/agent/context     # Get context usage
 ```
 
 ### Roadmap
 
 ```
-GET /api/projects/:id/roadmap           # Get roadmap content and parsed data
-POST /api/projects/:id/roadmap/generate # Generate roadmap via Claude
+GET    /api/projects/:id/roadmap           # Get roadmap
+POST   /api/projects/:id/roadmap/generate  # Generate roadmap
+PUT    /api/projects/:id/roadmap           # Modify roadmap
 ```
 
 ### Settings
 
 ```
-GET /api/settings   # Get global settings
-PUT /api/settings   # Update global settings
+GET    /api/settings              # Get settings
+PUT    /api/settings              # Update settings
 ```
 
-Settings payload:
-```json
-{
-  "maxConcurrentAgents": 3,
-  "claudePermissions": {
-    "dangerouslySkipPermissions": true
-  },
-  "agentPromptTemplate": "Template with ${var:project-name}, ${var:phase-title}, ${var:milestone-title}, ${var:milestone-item}",
-  "sendWithCtrlEnter": true
-}
-```
+### WebSocket
 
-| Setting | Description |
-|---------|-------------|
-| `maxConcurrentAgents` | Maximum agents that can run simultaneously (1-10) |
-| `claudePermissions.dangerouslySkipPermissions` | Skip permission prompts for Claude actions |
-| `agentPromptTemplate` | Template for autonomous agent instructions |
-| `sendWithCtrlEnter` | `true` = Ctrl+Enter sends, Enter adds newline. `false` = Enter sends, Shift+Enter adds newline |
+Connect to `ws://localhost:3000` for real-time updates:
 
-The `agentPromptTemplate` defines how instructions are given to agents. Available variables:
-- `${var:project-name}` - The project name
-- `${var:phase-title}` - Current phase title from ROADMAP.md
-- `${var:milestone-title}` - Current milestone title
-- `${var:milestone-item}` - The specific task to work on
+```javascript
+const ws = new WebSocket('ws://localhost:3000');
 
-## Project Structure
+// Subscribe to project updates
+ws.send(JSON.stringify({ type: 'subscribe', projectId: 'your-project-id' }));
 
-```
-src/
-  index.ts          # Entry point
-  config/           # Configuration loading
-  server/           # Express server setup
-  routes/           # API route handlers
-  services/         # Business logic
-  repositories/     # Data persistence
-  agents/           # Claude agent management
-  websocket/        # WebSocket handling
-  utils/            # Utility functions
-public/             # Static assets
-test/               # Unit and integration tests
-doc/                # Documentation
+// Message types received:
+// - agent_message: Real-time agent output
+// - agent_status: Status changes (running/stopped/error)
+// - queue_change: Queue updates
 ```
 
 ## Development
 
-### Running Tests
+### Setup
 
 ```bash
-npm test
-npm run test:coverage
+git clone https://github.com/anthropics/claudito.git
+cd claudito
+npm install
 ```
 
-### Linting
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server with hot reload |
+| `npm run build` | Build TypeScript to dist/ |
+| `npm start` | Run production build |
+| `npm test` | Run all tests |
+| `npm run test:coverage` | Run tests with coverage |
+| `npm run lint` | Run ESLint |
+| `npm run lint:fix` | Fix ESLint issues |
+| `npm run format` | Format code with Prettier |
+
+### Project Structure
+
+```
+claudito/
+├── src/
+│   ├── index.ts          # Library entry point
+│   ├── cli.ts            # CLI entry point
+│   ├── config/           # Configuration loading
+│   ├── server/           # Express server
+│   ├── routes/           # API routes
+│   ├── services/         # Business logic
+│   ├── repositories/     # Data persistence
+│   ├── agents/           # Claude agent management
+│   ├── websocket/        # WebSocket server
+│   └── utils/            # Utilities
+├── public/               # Static frontend assets
+├── test/                 # Test files
+└── doc/                  # Documentation
+```
+
+## Testing the Package Locally
+
+Before publishing, you can test the package locally to verify everything works correctly.
+
+### Method 1: npm pack (Recommended)
+
+Create a tarball and install it:
 
 ```bash
-npm run lint
-npm run lint:fix
+# Build the project
+npm run build
+
+# Create the package tarball
+npm pack
+
+# This creates claudito-0.1.0.tgz (version may vary)
+
+# Install globally from the tarball
+npm install -g ./claudito-0.1.0.tgz
+
+# Test the CLI
+claudito --help
+claudito --version
+claudito  # Starts the server
+
+# Uninstall when done
+npm uninstall -g claudito
 ```
 
-### Formatting
+### Method 2: npm link
+
+Create a symlink for development:
 
 ```bash
-npm run format
+# Build first
+npm run build
+
+# Create global symlink
+npm link
+
+# Now 'claudito' command is available globally
+claudito --help
+claudito
+
+# Unlink when done
+npm unlink -g claudito
 ```
+
+### Method 3: Dry Run
+
+Preview what would be published without creating a file:
+
+```bash
+# See what files would be included
+npm pack --dry-run
+
+# Check package size and contents
+npm publish --dry-run
+```
+
+### Method 4: Local npx
+
+Test as if running with npx:
+
+```bash
+# Build the project
+npm run build
+
+# Run the CLI directly
+node dist/cli.js --help
+node dist/cli.js
+
+# Or use npm script
+npm run cli -- --help
+npm run cli -- --port 8080
+```
+
+### Verifying the Package Contents
+
+Check that the package includes everything needed:
+
+```bash
+# List all files that will be published
+npm pack --dry-run 2>&1 | grep "npm notice"
+
+# Expected contents:
+# - dist/          (compiled JavaScript)
+# - public/        (frontend assets)
+# - README.md
+# - LICENSE
+# - package.json
+```
+
+### Testing in a Clean Environment
+
+For thorough testing, install in an isolated directory:
+
+```bash
+# Create test directory
+mkdir /tmp/claudito-test
+cd /tmp/claudito-test
+
+# Install from tarball
+npm init -y
+npm install /path/to/claudito-0.1.0.tgz
+
+# Run via npx
+npx claudito --help
+
+# Clean up
+cd ..
+rm -rf /tmp/claudito-test
+```
+
+## Troubleshooting
+
+### "claude: command not found"
+
+The Claude Code CLI is not installed or not in your PATH:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+### Port already in use
+
+Another process is using port 3000:
+
+```bash
+# Use a different port
+claudito --port 3001
+
+# Or find and kill the process using port 3000
+# Linux/macOS:
+lsof -i :3000
+kill -9 <PID>
+
+# Windows:
+netstat -ano | findstr :3000
+taskkill /PID <PID> /F
+```
+
+### Agent not responding
+
+Check the Debug panel (gear icon > Debug) to view:
+- Process status and PID
+- Recent logs
+- Last executed command
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+Made with Claude Code

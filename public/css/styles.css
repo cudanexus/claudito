@@ -747,8 +747,17 @@ body {
 /* Base color for all hljs elements - ensures nothing is invisible */
 .code-editor-backdrop .hljs,
 .code-editor-backdrop code.hljs,
-.code-editor-backdrop pre code.hljs {
-  color: #e5e7eb;
+.code-editor-backdrop pre code.hljs,
+.code-editor-backdrop code {
+  color: #e5e7eb !important;
+  background: transparent !important;
+}
+
+/* Ensure unclassified spans and text nodes inherit the visible color */
+.code-editor-backdrop .hljs span:not([class]),
+.code-editor-backdrop code span:not([class]),
+#code-editor-highlight span:not([class]) {
+  color: inherit;
 }
 
 .code-editor-backdrop .hljs-keyword { color: #ff79c6; }
@@ -1609,12 +1618,31 @@ body {
   pointer-events: none;
 }
 
-.code-editor-backdrop code {
+.code-editor-backdrop code,
+#code-editor-highlight {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
-  background: none;
+  background: none !important;
   padding: 0;
+  color: #e5e7eb;
+}
+
+/* Override the highlight.js base colors for our editor backdrop */
+.code-editor-backdrop code.hljs,
+#code-editor-highlight.hljs {
+  color: #e5e7eb !important;
+  background: none !important;
+}
+
+/* Ensure all text inside code blocks is visible - fallback for unclassified tokens */
+.code-editor-backdrop code,
+.code-editor-backdrop code span:not([class]),
+.code-editor-backdrop code span:not([class*="hljs-"]),
+#code-editor-highlight,
+#code-editor-highlight span:not([class]),
+#code-editor-highlight span:not([class*="hljs-"]) {
+  color: #e5e7eb;
 }
 
 .code-editor-textarea {
@@ -1705,6 +1733,114 @@ body {
   .btn-group-responsive > * {
     width: 100%;
   }
+}
+
+/* Debug log item styles */
+.debug-log-item {
+  transition: background-color 0.15s ease-in-out;
+}
+
+.debug-log-item:hover {
+  background-color: rgba(55, 65, 81, 0.5);
+}
+
+.debug-log-chevron {
+  transition: transform 0.2s ease-in-out;
+}
+
+.debug-log-chevron.rotate-180 {
+  transform: rotate(180deg);
+}
+
+.bg-gray-750 {
+  background-color: rgba(55, 65, 81, 0.7);
+}
+
+/* Image preview styles */
+.image-preview-item {
+  position: relative;
+  display: inline-block;
+  max-width: 150px;
+  border-radius: 0.375rem;
+  overflow: hidden;
+  border: 1px solid #4b5563;
+  background-color: #1f2937;
+}
+
+.image-preview-item img {
+  max-width: 100%;
+  max-height: 100px;
+  object-fit: contain;
+  display: block;
+}
+
+.image-preview-item .image-preview-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  background-color: rgba(0, 0, 0, 0.7);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #f87171;
+  transition: background-color 0.15s;
+}
+
+.image-preview-item .image-preview-remove:hover {
+  background-color: rgba(239, 68, 68, 0.8);
+  color: #fff;
+}
+
+.image-preview-item .image-preview-size {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  font-size: 0.625rem;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #9ca3af;
+  padding: 2px 4px;
+  text-align: center;
+}
+
+/* Conversation image styles */
+.conversation-image {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: 0.375rem;
+  border: 1px solid #374151;
+  margin: 0.5rem 0;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.conversation-image:hover {
+  transform: scale(1.02);
+}
+
+/* Image modal for full view */
+#image-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.9);
+}
+
+#image-modal.hidden {
+  display: none;
+}
+
+#image-modal img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
 }
 
 @media (max-width: 480px) {

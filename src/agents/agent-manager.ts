@@ -79,10 +79,15 @@ export interface OrphanCleanupResult {
   skippedPids: number[];
 }
 
+export interface ImageData {
+  type: string; // MIME type, e.g., 'image/png'
+  data: string; // Base64 encoded image data
+}
+
 export interface AgentManager {
   startAgent(projectId: string, instructions: string): Promise<void>;
-  startInteractiveAgent(projectId: string, initialMessage?: string): Promise<void>;
-  sendInput(projectId: string, input: string): void;
+  startInteractiveAgent(projectId: string, initialMessage?: string, images?: ImageData[]): Promise<void>;
+  sendInput(projectId: string, input: string, images?: ImageData[]): void;
   stopAgent(projectId: string): Promise<void>;
   stopAllAgents(): Promise<void>;
   getAgentStatus(projectId: string): AgentStatus;
@@ -202,7 +207,7 @@ export class DefaultAgentManager implements AgentManager {
     await this.startAgentImmediately(projectId, project.path, instructions);
   }
 
-  async startInteractiveAgent(projectId: string, initialMessage?: string): Promise<void> {
+  async startInteractiveAgent(projectId: string, initialMessage?: string, images?: ImageData[]): Promise<void> {
     if (this.agents.has(projectId)) {
       throw new Error('Agent is already running for this project');
     }
@@ -217,17 +222,21 @@ export class DefaultAgentManager implements AgentManager {
       throw new Error('Project not found');
     }
 
-    this.logger.withProject(projectId).info('Starting interactive agent');
+    this.logger.withProject(projectId).info('Starting interactive agent', {
+      hasMessage: !!initialMessage,
+      imageCount: images?.length || 0,
+    });
 
     // Create a new conversation for this interactive session
     const conversation = await this.conversationRepository.create(projectId, null);
     await this.projectRepository.setCurrentConversation(projectId, conversation.id);
 
-    const instructions = initialMessage || '';
+    // Build multimodal instructions if images are provided
+    const instructions = this.buildMultimodalContent(initialMessage || '', images);
     await this.startAgentImmediately(projectId, project.path, instructions, 'interactive');
   }
 
-  sendInput(projectId: string, input: string): void {
+  sendInput(projectId: string, input: string, images?: ImageData[]): void {
     const agent = this.agents.get(projectId);
 
     if (!agent) {
@@ -254,7 +263,44 @@ export class DefaultAgentManager implements AgentManager {
       }
     });
 
-    agent.sendInput(input);
+    // Build multimodal content if images are provided
+    const content = this.buildMultimodalContent(input, images);
+    agent.sendInput(content);
+  }
+
+  private buildMultimodalContent(text: string, images?: ImageData[]): string {
+    // If no images, return plain text
+    if (!images || images.length === 0) {
+      return text;
+    }
+
+    // Build multimodal content array for Claude
+    // Claude Code CLI accepts messages with content as an array of content blocks
+    const contentBlocks: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [];
+
+    // Add images first
+    for (const img of images) {
+      contentBlocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: img.type,
+          data: img.data,
+        },
+      });
+    }
+
+    // Add text if present
+    if (text) {
+      contentBlocks.push({
+        type: 'text',
+        text: text,
+      });
+    }
+
+    // Return as JSON string that will be parsed by the agent
+    // The agent's stdin expects a specific format - we need to encode this specially
+    return JSON.stringify(contentBlocks);
   }
 
   getAgentMode(projectId: string): AgentMode | null {
@@ -724,8 +770,14 @@ export class DefaultAgentManager implements AgentManager {
       return;
     }
 
+    // Save to conversation metadata
     this.conversationRepository
       .updateMetadata(agent.projectId, conversationId, { contextUsage })
+      .catch(() => {});
+
+    // Also save to project status for persistence when agent is stopped
+    this.projectRepository
+      .updateContextUsage(agent.projectId, contextUsage)
       .catch(() => {});
   }
 

@@ -45,6 +45,7 @@
     currentTodos: [], // Current task list from last TodoWrite
     activeTab: 'agent-output', // 'agent-output' or 'project-files'
     contextMenuTarget: null, // { path, isDir, name } for context menu actions
+    pendingImages: [], // Array of { id, dataUrl, mimeType, size } for images to send with message
     // File browser state
     fileBrowser: {
       expandedDirs: {},
@@ -159,20 +160,42 @@
         data: JSON.stringify({ phaseId: phaseId })
       });
     },
-    startInteractiveAgent: function(id, message) {
+    startInteractiveAgent: function(id, message, images) {
+      var payload = { message: message || '' };
+
+      if (images && images.length > 0) {
+        payload.images = images.map(function(img) {
+          return {
+            type: img.mimeType,
+            data: img.dataUrl.split(',')[1] // Remove data:image/xxx;base64, prefix
+          };
+        });
+      }
+
       return $.ajax({
         url: '/api/projects/' + id + '/agent/interactive',
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({ message: message || '' })
+        data: JSON.stringify(payload)
       });
     },
-    sendAgentMessage: function(id, message) {
+    sendAgentMessage: function(id, message, images) {
+      var payload = { message: message };
+
+      if (images && images.length > 0) {
+        payload.images = images.map(function(img) {
+          return {
+            type: img.mimeType,
+            data: img.dataUrl.split(',')[1] // Remove data:image/xxx;base64, prefix
+          };
+        });
+      }
+
       return $.ajax({
         url: '/api/projects/' + id + '/agent/send',
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({ message: message })
+        data: JSON.stringify(payload)
       });
     },
     getAgentStatus: function(id) {
@@ -883,15 +906,30 @@
     }
 
     if (msg.type === 'user') {
-      return '<div class="conversation-message user">' +
+      var userHtml = '<div class="conversation-message user">' +
         '<div class="message-header">' +
           '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
             '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>' +
           '</svg>' +
           '<span class="message-sender">You</span>' +
-        '</div>' +
-        '<pre class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</pre>' +
-      '</div>';
+        '</div>';
+
+      // Add images if present
+      if (msg.images && msg.images.length > 0) {
+        userHtml += '<div class="flex flex-wrap gap-2 mb-2">';
+        msg.images.forEach(function(img) {
+          userHtml += '<img src="' + img.dataUrl + '" alt="Attached image" class="conversation-image" onclick="window.showImageModal(this.src)">';
+        });
+        userHtml += '</div>';
+      }
+
+      // Add text content if present
+      if (msg.content) {
+        userHtml += '<pre class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</pre>';
+      }
+
+      userHtml += '</div>';
+      return userHtml;
     }
 
     // Render stdout/assistant messages with markdown and Claude icon
@@ -2253,10 +2291,100 @@
   }
 
   function renderDebugModal(data) {
+    renderDebugClaudeIOTab(data);
     renderDebugProcessTab(data);
     renderDebugCommandsTab(data);
     renderDebugLogsTab(data);
     renderDebugAllProcessesTab(data);
+  }
+
+  function renderDebugClaudeIOTab(data) {
+    var html = '';
+
+    // Filter logs to show only Claude I/O (direction: input/output)
+    var ioLogs = (data.recentLogs || []).filter(function(log) {
+      return log.context && log.context.direction;
+    });
+
+    html += '<div class="flex items-center justify-between mb-3">';
+    html += '<span class="text-gray-400 text-sm">Showing ' + ioLogs.length + ' Claude I/O events</span>';
+    html += '<div class="flex items-center gap-2">';
+    html += '<span class="flex items-center gap-1 text-xs"><span class="w-2 h-2 bg-blue-500 rounded-full"></span> Input</span>';
+    html += '<span class="flex items-center gap-1 text-xs"><span class="w-2 h-2 bg-green-500 rounded-full"></span> Output</span>';
+    html += '</div>';
+    html += '</div>';
+
+    if (ioLogs.length > 0) {
+      html += '<div class="space-y-2">';
+
+      ioLogs.forEach(function(log, index) {
+        var isInput = log.context.direction === 'input';
+        var borderColor = isInput ? 'border-l-blue-500' : 'border-l-green-500';
+        var bgColor = isInput ? 'bg-blue-900/20' : 'bg-green-900/20';
+        var directionLabel = isInput ? 'STDIN >>>' : 'STDOUT <<<';
+        var directionColor = isInput ? 'text-blue-400' : 'text-green-400';
+
+        html += '<div class="debug-log-item ' + bgColor + ' rounded border-l-2 ' + borderColor + ' cursor-pointer hover:bg-opacity-40 transition-colors" data-log-index="' + index + '" data-log-type="io">';
+        html += '<div class="p-2">';
+
+        // Header row
+        html += '<div class="flex items-center gap-2">';
+        html += '<span class="text-gray-500 text-xs">' + formatLogTime(log.timestamp) + '</span>';
+        html += '<span class="' + directionColor + ' text-xs font-semibold">' + directionLabel + '</span>';
+
+        if (log.context.eventType) {
+          html += '<span class="bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-xs">' + log.context.eventType + '</span>';
+        }
+
+        if (log.context.toolName) {
+          html += '<span class="bg-purple-700 text-purple-200 px-1.5 py-0.5 rounded text-xs">' + escapeHtml(log.context.toolName) + '</span>';
+        }
+
+        html += '<span class="text-gray-400 flex-1 truncate">' + escapeHtml(log.message) + '</span>';
+        html += '<svg class="w-4 h-4 text-gray-500 flex-shrink-0 debug-log-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+        html += '</div>';
+
+        // Preview (collapsed by default)
+        if (log.context.contentPreview) {
+          html += '<div class="mt-1 text-gray-400 text-xs truncate">' + escapeHtml(log.context.contentPreview.substring(0, 150)) + '</div>';
+        }
+
+        html += '</div>';
+
+        // Expandable detail (hidden by default)
+        html += '<div class="debug-log-detail hidden border-t border-gray-700 p-3 bg-gray-900/50">';
+        html += '<div class="space-y-2">';
+
+        // Full context
+        if (log.context) {
+          Object.keys(log.context).forEach(function(key) {
+            if (key === 'direction') return; // Skip direction, already shown
+            var value = log.context[key];
+            var valueStr = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+            html += '<div>';
+            html += '<span class="text-gray-500 text-xs">' + escapeHtml(key) + ':</span>';
+
+            if (valueStr.length > 100 || valueStr.includes('\n')) {
+              html += '<pre class="mt-1 bg-gray-800 rounded p-2 text-xs text-gray-300 whitespace-pre-wrap break-all max-h-64 overflow-auto">' + escapeHtml(valueStr) + '</pre>';
+            } else {
+              html += '<span class="ml-2 text-gray-300 text-xs">' + escapeHtml(valueStr) + '</span>';
+            }
+
+            html += '</div>';
+          });
+        }
+
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+
+      html += '</div>';
+    } else {
+      html += '<div class="text-gray-500 text-center py-8">No Claude I/O events yet. Start an agent to see input/output.</div>';
+    }
+
+    $('#debug-claude-io-content').html(html);
   }
 
   function renderDebugProcessTab(data) {
@@ -2366,27 +2494,60 @@
     var html = '';
 
     html += '<div class="flex items-center justify-between mb-3">';
-    html += '<span class="text-gray-400 text-sm">Showing ' + data.recentLogs.length + ' recent log entries</span>';
+    html += '<span class="text-gray-400 text-sm">Showing ' + data.recentLogs.length + ' recent log entries (click to expand)</span>';
     html += '</div>';
 
     if (data.recentLogs && data.recentLogs.length > 0) {
-      html += '<div class="bg-gray-800 rounded-lg overflow-hidden">';
+      html += '<div class="space-y-1">';
 
       data.recentLogs.forEach(function(log, index) {
         var levelClass = getLevelClass(log.level);
         var levelBgClass = getLevelBgClass(log.level);
-        var borderClass = index < data.recentLogs.length - 1 ? 'border-b border-gray-700' : '';
+        var hasContext = log.context && Object.keys(log.context).length > 0;
 
-        html += '<div class="p-2 ' + borderClass + ' ' + levelBgClass + '">';
-        html += '<div class="flex items-start gap-3">';
+        html += '<div class="debug-log-item bg-gray-800 rounded ' + levelBgClass + ' cursor-pointer hover:bg-gray-750 transition-colors" data-log-index="' + index + '" data-log-type="all">';
+        html += '<div class="p-2">';
+
+        // Header row (always visible)
+        html += '<div class="flex items-center gap-2">';
         html += '<span class="text-gray-500 text-xs whitespace-nowrap">' + formatLogTime(log.timestamp) + '</span>';
         html += '<span class="' + levelClass + ' text-xs font-semibold w-12">' + log.level.toUpperCase() + '</span>';
-        html += '<span class="text-gray-300 flex-1 break-all">' + escapeHtml(log.message) + '</span>';
+
+        if (log.name) {
+          html += '<span class="text-gray-600 text-xs">[' + escapeHtml(log.name) + ']</span>';
+        }
+
+        html += '<span class="text-gray-300 flex-1 truncate">' + escapeHtml(log.message) + '</span>';
+
+        if (hasContext) {
+          html += '<svg class="w-4 h-4 text-gray-500 flex-shrink-0 debug-log-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+        }
+
+        html += '</div>';
         html += '</div>';
 
-        if (log.context && Object.keys(log.context).length > 0) {
-          html += '<div class="mt-1 ml-24 text-xs text-gray-500 font-mono">';
-          html += escapeHtml(JSON.stringify(log.context));
+        // Expandable detail (hidden by default)
+        if (hasContext) {
+          html += '<div class="debug-log-detail hidden border-t border-gray-700 p-3 bg-gray-900/50">';
+          html += '<div class="space-y-2">';
+
+          Object.keys(log.context).forEach(function(key) {
+            var value = log.context[key];
+            var valueStr = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+
+            html += '<div>';
+            html += '<span class="text-gray-500 text-xs">' + escapeHtml(key) + ':</span>';
+
+            if (valueStr.length > 100 || valueStr.includes('\n')) {
+              html += '<pre class="mt-1 bg-gray-800 rounded p-2 text-xs text-gray-300 whitespace-pre-wrap break-all max-h-64 overflow-auto">' + escapeHtml(valueStr) + '</pre>';
+            } else {
+              html += '<span class="ml-2 text-gray-300 text-xs">' + escapeHtml(valueStr) + '</span>';
+            }
+
+            html += '</div>';
+          });
+
+          html += '</div>';
           html += '</div>';
         }
 
@@ -2670,6 +2831,18 @@
       // Show/hide tab content
       $('.debug-tab-content').addClass('hidden');
       $('#debug-tab-' + tabName).removeClass('hidden');
+    });
+
+    // Debug log item click to expand/collapse
+    $(document).on('click', '.debug-log-item', function(e) {
+      var $item = $(this);
+      var $detail = $item.find('.debug-log-detail');
+      var $chevron = $item.find('.debug-log-chevron');
+
+      if ($detail.length === 0) return; // No detail to expand
+
+      $detail.toggleClass('hidden');
+      $chevron.toggleClass('rotate-180');
     });
 
     $('#btn-create-roadmap').on('click', function() {
@@ -3125,7 +3298,7 @@
     });
 
     $('#btn-mode-autonomous').on('click', function() {
-      setAgentMode('autonomous');
+      showToast('Autonomous mode is currently in development', 'info');
     });
 
     // Message form handler
@@ -3262,6 +3435,17 @@
           }
         }
       }
+    });
+
+    // Image paste handler
+    $('#input-message').on('paste', handleImagePaste);
+
+    // Remove image button handler
+    $(document).on('click', '.image-preview-remove', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var imageId = $(this).data('image-id');
+      removeImage(imageId);
     });
 
     // Permission button click handler
@@ -3662,8 +3846,11 @@
 
     var $input = $('#input-message');
     var message = $input.val().trim();
+    var hasImages = state.pendingImages.length > 0;
 
-    if (!message || !state.selectedProjectId) return;
+    if (!message && !hasImages) return;
+
+    if (!state.selectedProjectId) return;
 
     var project = findProjectById(state.selectedProjectId);
 
@@ -3684,6 +3871,7 @@
     if (state.messageSending) return;
 
     var $input = $('#input-message');
+    var images = state.pendingImages.slice(); // Copy the array
 
     state.messageSending = true;
 
@@ -3691,19 +3879,29 @@
     $input.prop('disabled', true);
     $('#btn-send-message').prop('disabled', true);
 
-    // Add user message to conversation
-    appendMessage(state.selectedProjectId, {
+    // Build user message with images
+    var userMessage = {
       type: 'user',
       content: message,
       timestamp: new Date().toISOString()
-    });
+    };
+
+    if (images.length > 0) {
+      userMessage.images = images.map(function(img) {
+        return { dataUrl: img.dataUrl, mimeType: img.mimeType };
+      });
+    }
+
+    // Add user message to conversation
+    appendMessage(state.selectedProjectId, userMessage);
 
     // Show waiting indicator
     showWaitingIndicator();
 
-    api.sendAgentMessage(state.selectedProjectId, message)
+    api.sendAgentMessage(state.selectedProjectId, message, images)
       .done(function() {
         $input.val('').trigger('input');
+        clearPendingImages();
       })
       .fail(function(xhr) {
         showErrorToast(xhr, 'Failed to send message');
@@ -3722,6 +3920,7 @@
 
     var $input = $('#input-message');
     var projectId = state.selectedProjectId;
+    var images = state.pendingImages.slice(); // Copy the array
 
     state.agentStarting = true;
 
@@ -3730,21 +3929,31 @@
     $('#btn-send-message').prop('disabled', true);
     showContentLoading('Starting agent...');
 
-    api.startInteractiveAgent(projectId, message)
+    api.startInteractiveAgent(projectId, message, images)
       .done(function() {
         state.currentAgentMode = 'interactive';
         updateProjectStatusById(projectId, 'running');
         startAgentStatusPolling(projectId);
 
-        // Add user message to conversation
-        appendMessage(projectId, {
+        // Build user message with images
+        var userMessage = {
           type: 'user',
           content: message,
           timestamp: new Date().toISOString()
-        });
+        };
 
-        // Clear input and show waiting
+        if (images.length > 0) {
+          userMessage.images = images.map(function(img) {
+            return { dataUrl: img.dataUrl, mimeType: img.mimeType };
+          });
+        }
+
+        // Add user message to conversation
+        appendMessage(projectId, userMessage);
+
+        // Clear input and images, show waiting
         $input.val('').trigger('input');
+        clearPendingImages();
         showWaitingIndicator();
         updateInputArea();
       })
@@ -3760,6 +3969,100 @@
       });
   }
 
+  // Image handling functions
+  function handleImagePaste(e) {
+    var clipboardData = e.originalEvent.clipboardData || e.clipboardData;
+
+    if (!clipboardData || !clipboardData.items) return;
+
+    for (var i = 0; i < clipboardData.items.length; i++) {
+      var item = clipboardData.items[i];
+
+      if (item.type.indexOf('image') !== -1) {
+        e.preventDefault();
+        var file = item.getAsFile();
+
+        if (file) {
+          processImageFile(file);
+        }
+      }
+    }
+  }
+
+  function processImageFile(file) {
+    // Limit file size to 5MB
+    var maxSize = 5 * 1024 * 1024;
+
+    if (file.size > maxSize) {
+      showToast('Image too large (max 5MB)', 'error');
+      return;
+    }
+
+    var reader = new FileReader();
+
+    reader.onload = function(e) {
+      var dataUrl = e.target.result;
+      var imageId = 'img-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+      state.pendingImages.push({
+        id: imageId,
+        dataUrl: dataUrl,
+        mimeType: file.type,
+        size: file.size
+      });
+
+      renderImagePreviews();
+    };
+
+    reader.onerror = function() {
+      showToast('Failed to read image', 'error');
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  function renderImagePreviews() {
+    var $container = $('#image-preview-container');
+    var $previews = $('#image-previews');
+
+    if (state.pendingImages.length === 0) {
+      $container.addClass('hidden');
+      $previews.empty();
+      return;
+    }
+
+    $container.removeClass('hidden');
+    $previews.empty();
+
+    state.pendingImages.forEach(function(img) {
+      var sizeKB = Math.round(img.size / 1024);
+      var sizeText = sizeKB > 1024 ? (sizeKB / 1024).toFixed(1) + ' MB' : sizeKB + ' KB';
+
+      var html = '<div class="image-preview-item" data-image-id="' + img.id + '">' +
+        '<img src="' + img.dataUrl + '" alt="Preview">' +
+        '<button type="button" class="image-preview-remove" data-image-id="' + img.id + '">' +
+          '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>' +
+          '</svg>' +
+        '</button>' +
+        '<div class="image-preview-size">' + sizeText + '</div>' +
+      '</div>';
+      $previews.append(html);
+    });
+  }
+
+  function removeImage(imageId) {
+    state.pendingImages = state.pendingImages.filter(function(img) {
+      return img.id !== imageId;
+    });
+    renderImagePreviews();
+  }
+
+  function clearPendingImages() {
+    state.pendingImages = [];
+    renderImagePreviews();
+  }
+
   function showWaitingIndicator() {
     removeWaitingIndicator(); // Remove any existing one first
     var html = '<div id="waiting-indicator" class="flex items-center gap-2 text-gray-400 text-sm py-2">' +
@@ -3773,6 +4076,36 @@
   function removeWaitingIndicator() {
     $('#waiting-indicator').remove();
   }
+
+  // Image modal for full-size viewing
+  window.showImageModal = function(src) {
+    var $modal = $('#image-modal');
+
+    if ($modal.length === 0) {
+      // Create modal if it doesn't exist
+      $('body').append(
+        '<div id="image-modal" class="hidden">' +
+          '<img src="" alt="Full size image">' +
+        '</div>'
+      );
+      $modal = $('#image-modal');
+
+      // Close on click
+      $modal.on('click', function() {
+        $modal.addClass('hidden');
+      });
+
+      // Close on escape
+      $(document).on('keydown', function(e) {
+        if (e.key === 'Escape' && !$modal.hasClass('hidden')) {
+          $modal.addClass('hidden');
+        }
+      });
+    }
+
+    $modal.find('img').attr('src', src);
+    $modal.removeClass('hidden');
+  };
 
   function setupTextareaKeyHandlers() {
     // Prevent Enter from submitting forms in textareas

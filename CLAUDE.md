@@ -143,7 +143,7 @@ Agent manager runs autonomous loop that:
 - **Graceful Shutdown**: SIGINT/SIGTERM stops all running agents before server shutdown
 - **PID Tracking**: Agent PIDs persisted to `$HOME/.claudito/pids.json`, orphans verified and killed on startup
 - **Conversation Statistics**: Duration, message count, tool call count, total tokens displayed in UI (real-time updates)
-- **Context Usage Persistence**: Token usage saved to conversation metadata for historical tracking
+- **Context Usage Persistence**: Token usage saved to both conversation metadata and project status.json for historical tracking (viewable even when agent is stopped)
 
 ## UI Features
 

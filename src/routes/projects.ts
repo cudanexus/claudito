@@ -441,7 +441,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     res.json({ status, queued: isQueued, mode, queuedMessageCount });
   }));
 
-  // Get context usage for running agent
+  // Get context usage for running agent or last saved usage
   router.get('/:id/agent/context', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
     const project = await projectRepository.findById(id);
@@ -450,7 +450,14 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       throw new NotFoundError('Project');
     }
 
-    const contextUsage = agentManager.getContextUsage(id);
+    // First try to get from running agent
+    let contextUsage = agentManager.getContextUsage(id);
+
+    // If agent is not running, use last saved context usage from project status
+    if (!contextUsage && project.lastContextUsage) {
+      contextUsage = project.lastContextUsage;
+    }
+
     res.json({ contextUsage });
   }));
 
@@ -503,7 +510,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
   // Start interactive agent session
   router.post('/:id/agent/interactive', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
-    const { message } = req.body;
+    const { message, images } = req.body;
     const project = await projectRepository.findById(id);
 
     if (!project) {
@@ -514,22 +521,23 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       throw new ConflictError('Agent is already running');
     }
 
-    await agentManager.startInteractiveAgent(id, message);
+    await agentManager.startInteractiveAgent(id, message, images);
     res.json({ success: true, status: 'running', mode: 'interactive' });
   }));
 
   // Send input to running interactive agent
   router.post('/:id/agent/send', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
-    const { message } = req.body;
+    const { message, images } = req.body;
     const project = await projectRepository.findById(id);
 
     if (!project) {
       throw new NotFoundError('Project');
     }
 
-    if (!message) {
-      throw new ValidationError('Message is required');
+    // Allow empty message if images are provided
+    if (!message && (!images || images.length === 0)) {
+      throw new ValidationError('Message or images required');
     }
 
     if (!agentManager.isRunning(id)) {
@@ -542,7 +550,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       throw new ValidationError('Agent is not in interactive mode');
     }
 
-    agentManager.sendInput(id, message);
+    agentManager.sendInput(id, message, images);
     res.json({ success: true });
   }));
 

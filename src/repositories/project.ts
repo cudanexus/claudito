@@ -8,6 +8,16 @@ export interface MilestoneItemRef {
   taskTitle: string;
 }
 
+export interface ContextUsageData {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  maxContextTokens: number;
+  percentUsed: number;
+}
+
 export interface ProjectStatus {
   id: string;
   name: string;
@@ -16,6 +26,7 @@ export interface ProjectStatus {
   currentConversationId: string | null;
   nextItem: MilestoneItemRef | null;
   currentItem: MilestoneItemRef | null;
+  lastContextUsage: ContextUsageData | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +50,7 @@ export interface ProjectRepository {
   updateNextItem(id: string, nextItem: MilestoneItemRef | null): Promise<ProjectStatus | null>;
   updateCurrentItem(id: string, currentItem: MilestoneItemRef | null): Promise<ProjectStatus | null>;
   setCurrentConversation(id: string, conversationId: string | null): Promise<ProjectStatus | null>;
+  updateContextUsage(id: string, contextUsage: ContextUsageData | null): Promise<ProjectStatus | null>;
   delete(id: string): Promise<boolean>;
 }
 
@@ -294,6 +306,7 @@ export class FileProjectRepository implements ProjectRepository {
       currentConversationId: null,
       nextItem: null,
       currentItem: null,
+      lastContextUsage: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -351,6 +364,18 @@ export class FileProjectRepository implements ProjectRepository {
     }
 
     status.currentConversationId = conversationId;
+    this.saveStatus(status);
+    return { ...status };
+  }
+
+  async updateContextUsage(id: string, contextUsage: ContextUsageData | null): Promise<ProjectStatus | null> {
+    const status = this.loadStatus(id);
+
+    if (!status) {
+      return null;
+    }
+
+    status.lastContextUsage = contextUsage;
     this.saveStatus(status);
     return { ...status };
   }

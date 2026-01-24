@@ -290,6 +290,12 @@
 
         <!-- Input Area for Interactive Mode -->
         <div id="interactive-input-area" class="bg-gray-800 border-t border-gray-700 p-2">
+          <!-- Image Preview Area (hidden by default) -->
+          <div id="image-preview-container" class="hidden mb-2">
+            <div class="flex flex-wrap gap-2" id="image-previews">
+              <!-- Image previews will be added here -->
+            </div>
+          </div>
           <form id="form-send-message" class="flex gap-2 items-stretch">
             <textarea
               id="input-message"
@@ -311,6 +317,7 @@
           </form>
           <div id="input-hint" class="text-xs text-gray-500 mt-1">
             <span id="input-hint-text">Ctrl+Enter to send, Enter for new line</span>
+            <span class="text-gray-600 ml-2">• Paste images with Ctrl+V</span>
           </div>
         </div>
       </div>

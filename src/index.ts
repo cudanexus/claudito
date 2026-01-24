@@ -11,7 +11,14 @@ async function main(): Promise<void> {
 
   const server = new ExpressHttpServer({ config });
 
+  let isShuttingDown = false;
+
   const shutdown = (signal: string): void => {
+    if (isShuttingDown) {
+      return;
+    }
+    isShuttingDown = true;
+
     logger.info('Shutting down...', { signal });
     server
       .stop()

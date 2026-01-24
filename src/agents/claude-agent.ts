@@ -240,20 +240,36 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // Write instructions to stdin using stream-json format
     if (this.process.stdin) {
       if (instructions && instructions.trim()) {
+        // Check if instructions is a JSON array (multimodal content)
+        let content: string | unknown[] = instructions;
+        let isMultimodal = false;
+
+        try {
+          const parsed = JSON.parse(instructions);
+
+          if (Array.isArray(parsed)) {
+            content = parsed;
+            isMultimodal = true;
+          }
+        } catch {
+          // Not JSON, treat as plain text
+        }
+
         // Format: {"type":"user","message":{"role":"user","content":"..."}}
         const message = JSON.stringify({
           type: 'user',
           message: {
             role: 'user',
-            content: instructions,
+            content: content,
           },
         });
 
         this.logger.info('STDIN >>> Sending initial instructions', {
           direction: 'input',
           messageType: 'user',
+          isMultimodal,
           contentLength: instructions.length,
-          contentPreview: this.truncateForLog(instructions, 500),
+          contentPreview: isMultimodal ? '[multimodal content]' : this.truncateForLog(instructions, 500),
         });
 
         this.process.stdin.write(message + '\n');
@@ -389,20 +405,36 @@ export class DefaultClaudeAgent implements ClaudeAgent {
 
     this.isProcessing = true;
 
+    // Check if input is a JSON array (multimodal content)
+    let content: string | unknown[] = input;
+    let isMultimodal = false;
+
+    try {
+      const parsed = JSON.parse(input);
+
+      if (Array.isArray(parsed)) {
+        content = parsed;
+        isMultimodal = true;
+      }
+    } catch {
+      // Not JSON, treat as plain text
+    }
+
     // Format input as stream-json message
     const message = JSON.stringify({
       type: 'user',
       message: {
         role: 'user',
-        content: input,
+        content: content,
       },
     });
 
     this.logger.info('STDIN >>> Sending user message', {
       direction: 'input',
       messageType: 'user',
+      isMultimodal,
       contentLength: input.length,
-      contentPreview: this.truncateForLog(input, 500),
+      contentPreview: isMultimodal ? '[multimodal content]' : this.truncateForLog(input, 500),
     });
 
     this.process.stdin.write(message + '\n');
