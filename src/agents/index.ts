@@ -12,4 +12,5 @@ export {
   MilestoneRef,
   TrackedProcessInfo,
   OrphanCleanupResult,
+  ImageData,
 } from './agent-manager';

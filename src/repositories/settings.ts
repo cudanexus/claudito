@@ -46,9 +46,18 @@ const DEFAULT_SETTINGS: GlobalSettings = {
   historyLimit: 25,
 };
 
+// Update type that allows partial claudePermissions for incremental updates
+export interface SettingsUpdate {
+  maxConcurrentAgents?: number;
+  claudePermissions?: Partial<ClaudePermissions>;
+  agentPromptTemplate?: string;
+  sendWithCtrlEnter?: boolean;
+  historyLimit?: number;
+}
+
 export interface SettingsRepository {
   get(): Promise<GlobalSettings>;
-  update(settings: Partial<GlobalSettings>): Promise<GlobalSettings>;
+  update(settings: SettingsUpdate): Promise<GlobalSettings>;
 }
 
 export interface FileSystemAdapter {
@@ -119,7 +128,7 @@ export class FileSettingsRepository implements SettingsRepository {
     return Promise.resolve({ ...this.settings });
   }
 
-  update(updates: Partial<GlobalSettings>): Promise<GlobalSettings> {
+  update(updates: SettingsUpdate): Promise<GlobalSettings> {
     if (updates.maxConcurrentAgents !== undefined) {
       this.settings.maxConcurrentAgents = Math.max(1, updates.maxConcurrentAgents);
     }
