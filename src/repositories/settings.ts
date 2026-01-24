@@ -1,9 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 
+export interface PermissionRule {
+  tool: string;
+  specifier?: string;
+}
+
 export interface ClaudePermissions {
+  /** @deprecated Use allowRules instead. Will be removed in future version. */
   dangerouslySkipPermissions: boolean;
+  /** @deprecated Use allowRules instead */
   allowedTools: string[];
+  /** Permission rules that allow tool usage without prompting */
+  allowRules: string[];
+  /** Permission rules that require confirmation before use */
+  askRules: string[];
+  /** Permission rules that block tool usage entirely */
+  denyRules: string[];
+  /** Default permission mode: 'default' | 'acceptEdits' | 'plan' */
+  defaultMode: 'default' | 'acceptEdits' | 'plan';
 }
 
 export const DEFAULT_AGENT_PROMPT_TEMPLATE = `You are working on the project "\${var:project-name}".
@@ -33,17 +48,23 @@ export interface GlobalSettings {
   agentPromptTemplate: string;
   sendWithCtrlEnter: boolean;
   historyLimit: number;
+  enableDesktopNotifications: boolean;
 }
 
 const DEFAULT_SETTINGS: GlobalSettings = {
   maxConcurrentAgents: 3,
   claudePermissions: {
-    dangerouslySkipPermissions: true,
+    dangerouslySkipPermissions: false,
     allowedTools: [],
+    allowRules: [],
+    askRules: [],
+    denyRules: [],
+    defaultMode: 'default',
   },
   agentPromptTemplate: DEFAULT_AGENT_PROMPT_TEMPLATE,
   sendWithCtrlEnter: true,
   historyLimit: 25,
+  enableDesktopNotifications: false,
 };
 
 // Update type that allows partial claudePermissions for incremental updates
@@ -53,6 +74,7 @@ export interface SettingsUpdate {
   agentPromptTemplate?: string;
   sendWithCtrlEnter?: boolean;
   historyLimit?: number;
+  enableDesktopNotifications?: boolean;
 }
 
 export interface SettingsRepository {
@@ -107,15 +129,22 @@ export class FileSettingsRepository implements SettingsRepository {
   }
 
   private mergeWithDefaults(parsed: Partial<GlobalSettings>): GlobalSettings {
+    const parsedPerms = parsed.claudePermissions;
+
     return {
       maxConcurrentAgents: parsed.maxConcurrentAgents ?? DEFAULT_SETTINGS.maxConcurrentAgents,
       claudePermissions: {
-        ...DEFAULT_SETTINGS.claudePermissions,
-        ...parsed.claudePermissions,
+        dangerouslySkipPermissions: parsedPerms?.dangerouslySkipPermissions ?? DEFAULT_SETTINGS.claudePermissions.dangerouslySkipPermissions,
+        allowedTools: parsedPerms?.allowedTools ?? DEFAULT_SETTINGS.claudePermissions.allowedTools,
+        allowRules: parsedPerms?.allowRules ?? DEFAULT_SETTINGS.claudePermissions.allowRules,
+        askRules: parsedPerms?.askRules ?? DEFAULT_SETTINGS.claudePermissions.askRules,
+        denyRules: parsedPerms?.denyRules ?? DEFAULT_SETTINGS.claudePermissions.denyRules,
+        defaultMode: parsedPerms?.defaultMode ?? DEFAULT_SETTINGS.claudePermissions.defaultMode,
       },
       agentPromptTemplate: parsed.agentPromptTemplate ?? DEFAULT_SETTINGS.agentPromptTemplate,
       sendWithCtrlEnter: parsed.sendWithCtrlEnter ?? DEFAULT_SETTINGS.sendWithCtrlEnter,
       historyLimit: parsed.historyLimit ?? DEFAULT_SETTINGS.historyLimit,
+      enableDesktopNotifications: parsed.enableDesktopNotifications ?? DEFAULT_SETTINGS.enableDesktopNotifications,
     };
   }
 
@@ -150,6 +179,10 @@ export class FileSettingsRepository implements SettingsRepository {
 
     if (updates.historyLimit !== undefined) {
       this.settings.historyLimit = Math.max(5, Math.min(100, updates.historyLimit));
+    }
+
+    if (updates.enableDesktopNotifications !== undefined) {
+      this.settings.enableDesktopNotifications = updates.enableDesktopNotifications;
     }
 
     this.saveToFile();

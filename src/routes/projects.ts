@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { ProjectRepository, ConversationRepository, MilestoneItemRef } from '../repositories';
+import { ProjectRepository, ConversationRepository, MilestoneItemRef, ProjectPermissionOverrides } from '../repositories';
 import { MilestoneRef, AgentMessage, ImageData } from '../agents';
 import { ProjectService, RoadmapParser, RoadmapGenerator, InstructionGenerator, RoadmapEditor } from '../services';
 import { AgentManager } from '../agents';
@@ -55,6 +55,13 @@ interface RenameConversationBody {
 interface ClaudeFileSaveBody {
   filePath?: string;
   content?: string;
+}
+
+interface PermissionOverridesBody {
+  enabled?: boolean;
+  allowRules?: string[];
+  denyRules?: string[];
+  defaultMode?: 'default' | 'acceptEdits' | 'plan';
 }
 
 function computeConversationStats(
@@ -497,7 +504,8 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     const isQueued = agentManager.isQueued(id);
     const mode = agentManager.getAgentMode(id);
     const queuedMessageCount = agentManager.getQueuedMessageCount(id);
-    res.json({ status, queued: isQueued, mode, queuedMessageCount });
+    const isWaitingForInput = agentManager.isWaitingForInput(id);
+    res.json({ status, queued: isQueued, mode, queuedMessageCount, isWaitingForInput });
   }));
 
   // Get context usage for running agent or last saved usage
@@ -761,6 +769,39 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
 
     fs.writeFileSync(filePath, content, 'utf-8');
     res.json({ success: true });
+  }));
+
+  // GET /api/projects/:id/permissions - Get project permission overrides
+  router.get('/:id/permissions', asyncHandler(async (req: Request, res: Response) => {
+    const projectId = req.params.id as string;
+    const project = await projectRepository.findById(projectId);
+
+    if (!project) {
+      throw new NotFoundError('Project not found');
+    }
+
+    res.json(project.permissionOverrides || { enabled: false });
+  }));
+
+  // PUT /api/projects/:id/permissions - Update project permission overrides
+  router.put('/:id/permissions', asyncHandler(async (req: Request, res: Response) => {
+    const projectId = req.params.id as string;
+    const project = await projectRepository.findById(projectId);
+
+    if (!project) {
+      throw new NotFoundError('Project not found');
+    }
+
+    const body = req.body as PermissionOverridesBody;
+    const overrides: ProjectPermissionOverrides = {
+      enabled: body.enabled ?? false,
+      allowRules: body.allowRules,
+      denyRules: body.denyRules,
+      defaultMode: body.defaultMode,
+    };
+
+    const updated = await projectRepository.updatePermissionOverrides(project.id, overrides.enabled ? overrides : null);
+    res.json(updated?.permissionOverrides || { enabled: false });
   }));
 
   return router;

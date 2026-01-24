@@ -59,7 +59,8 @@
     claudeFilesState: {
       files: [],
       currentFile: null // { path, name, content, originalContent, size, isGlobal }
-    }
+    },
+    devMode: false
   };
 
   // API functions
@@ -247,6 +248,12 @@
         contentType: 'application/json',
         data: JSON.stringify({ path: targetPath, isDirectory: isDirectory })
       });
+    },
+    getDevStatus: function() {
+      return $.get('/api/dev');
+    },
+    shutdownServer: function() {
+      return $.post('/api/dev/shutdown');
     }
   };
 
@@ -728,8 +735,11 @@
     var statusClass = project.status || 'stopped';
     var statusText = capitalizeFirst(statusClass);
     var quickActions = renderQuickActions(project);
+    var isWaiting = project.isWaitingForInput || false;
+    var waitingClass = isWaiting ? ' waiting-for-input' : '';
+    var waitingIndicator = isWaiting ? '<span class="waiting-indicator" title="Waiting for your input"></span>' : '';
 
-    return '<div class="project-card" data-id="' + project.id + '">' +
+    return '<div class="project-card' + waitingClass + '" data-id="' + project.id + '">' +
       '<div class="flex justify-between items-start">' +
         '<div class="project-card-name flex-1 truncate">' + escapeHtml(project.name) + '</div>' +
         quickActions +
@@ -737,7 +747,8 @@
       '<div class="project-card-path">' + escapeHtml(project.path) + '</div>' +
       '<div class="project-card-status">' +
         '<span class="status-badge ' + statusClass + '">' + statusText + '</span>' +
-        (statusClass === 'running' ? '<span class="running-indicator"></span>' : '') +
+        waitingIndicator +
+        (statusClass === 'running' && !isWaiting ? '<span class="running-indicator"></span>' : '') +
       '</div>' +
     '</div>';
   }
@@ -766,6 +777,18 @@
   }
 
   // Project list rendering
+  function sortProjects(projects) {
+    return projects.slice().sort(function(a, b) {
+      var aRunning = a.status === 'running' || a.status === 'queued';
+      var bRunning = b.status === 'running' || b.status === 'queued';
+
+      if (aRunning && !bRunning) return -1;
+      if (!aRunning && bRunning) return 1;
+
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+  }
+
   function renderProjectList() {
     var $list = $('#project-list');
     $list.empty();
@@ -775,7 +798,8 @@
       return;
     }
 
-    state.projects.forEach(function(project) {
+    var sortedProjects = sortProjects(state.projects);
+    sortedProjects.forEach(function(project) {
       $list.append(renderProjectCard(project));
     });
 
@@ -1923,8 +1947,14 @@
         removeWaitingIndicator();
       }
 
+      // Handle tool_result messages - update specific tool status
+      if (message.type === 'tool_result' && message.toolInfo) {
+        updateToolStatus(message.toolInfo.id, message.toolInfo.status || 'completed');
+        return; // Don't render tool_result as a separate message
+      }
+
       // Mark previous running tools as completed when non-tool content arrives
-      if (message.type !== 'tool_use' && message.type !== 'user') {
+      if (message.type !== 'tool_use' && message.type !== 'user' && message.type !== 'tool_result') {
         markRunningToolsComplete();
       }
 
@@ -2807,12 +2837,40 @@
       loadAndShowSettings();
     });
 
+    // Permission skip checkbox toggles other permission fields
+    $('#input-skip-permissions').on('change', function() {
+      updatePermissionFieldsState();
+    });
+
+    // Permission presets
+    $(document).on('click', '.permission-preset', function() {
+      var presetName = $(this).data('preset');
+      applyPermissionPreset(presetName);
+    });
+
     $('#btn-view-roadmap').on('click', function() {
       loadAndShowRoadmap();
     });
 
     $('#btn-toggle-debug').on('click', function() {
       openDebugModal();
+    });
+
+    $('#btn-toggle-dev').on('click', function() {
+      openModal('modal-dev');
+    });
+
+    $('#btn-dev-shutdown').on('click', function() {
+      if (confirm('Are you sure you want to shutdown the server?')) {
+        api.shutdownServer()
+          .done(function() {
+            showToast('Server is shutting down...', 'info');
+            closeModal('modal-dev');
+          })
+          .fail(function(xhr) {
+            showToast(getErrorMessage(xhr), 'error');
+          });
+      }
     });
 
     $('#btn-debug-refresh').on('click', function() {
@@ -3013,11 +3071,18 @@
   function loadAndShowSettings() {
     api.getSettings()
       .done(function(settings) {
+        var perms = settings.claudePermissions || {};
+
         $('#input-max-concurrent').val(settings.maxConcurrentAgents);
-        $('#input-skip-permissions').prop('checked', settings.claudePermissions.dangerouslySkipPermissions);
+        $('#input-skip-permissions').prop('checked', perms.dangerouslySkipPermissions);
+        $('#input-permission-mode').val(perms.defaultMode || 'default');
+        $('#input-allow-rules').val((perms.allowRules || []).join('\n'));
+        $('#input-deny-rules').val((perms.denyRules || []).join('\n'));
         $('#input-agent-prompt').val(settings.agentPromptTemplate || '');
         $('#input-send-ctrl-enter').prop('checked', settings.sendWithCtrlEnter !== false);
         $('#input-history-limit').val(settings.historyLimit || 25);
+        $('#input-desktop-notifications').prop('checked', settings.enableDesktopNotifications || false);
+        updatePermissionFieldsState();
         openModal('modal-settings');
       })
       .fail(function(xhr) {
@@ -3025,24 +3090,123 @@
       });
   }
 
+  function updatePermissionFieldsState() {
+    var skipAll = $('#input-skip-permissions').is(':checked');
+    var $fields = $('#input-permission-mode, #input-allow-rules, #input-deny-rules');
+    var $presets = $('.permission-preset');
+
+    if (skipAll) {
+      $fields.prop('disabled', true).addClass('opacity-50');
+      $presets.prop('disabled', true).addClass('opacity-50');
+    } else {
+      $fields.prop('disabled', false).removeClass('opacity-50');
+      $presets.prop('disabled', false).removeClass('opacity-50');
+    }
+  }
+
+  function parseRulesFromTextarea(value) {
+    return value.split('\n')
+      .map(function(line) { return line.trim(); })
+      .filter(function(line) { return line.length > 0; });
+  }
+
+  var permissionPresets = {
+    'safe-dev': {
+      allowRules: [
+        'Read',
+        'Glob',
+        'Grep',
+        'Bash(npm run:*)',
+        'Bash(npm test:*)',
+        'Bash(npm install)',
+        'Bash(git status)',
+        'Bash(git diff:*)',
+        'Bash(git log:*)',
+        'Bash(git branch:*)'
+      ],
+      denyRules: [
+        'Read(./.env)',
+        'Read(./.env.*)',
+        'Bash(rm -rf:*)',
+        'Bash(curl:*)',
+        'Bash(wget:*)',
+        'Bash(git push:*)',
+        'Bash(git push)'
+      ]
+    },
+    'git-only': {
+      allowRules: [
+        'Read',
+        'Glob',
+        'Grep',
+        'Bash(git:*)'
+      ],
+      denyRules: [
+        'Read(./.env)',
+        'Read(./.env.*)',
+        'Bash(git push:*)',
+        'Bash(git push)'
+      ]
+    },
+    'read-only': {
+      allowRules: [
+        'Read',
+        'Glob',
+        'Grep'
+      ],
+      denyRules: [
+        'Read(./.env)',
+        'Read(./.env.*)',
+        'Write',
+        'Edit',
+        'Bash'
+      ]
+    },
+    'clear-all': {
+      allowRules: [],
+      denyRules: []
+    }
+  };
+
+  function applyPermissionPreset(presetName) {
+    var preset = permissionPresets[presetName];
+
+    if (!preset) return;
+
+    $('#input-allow-rules').val(preset.allowRules.join('\n'));
+    $('#input-deny-rules').val(preset.denyRules.join('\n'));
+    showToast('Preset "' + presetName.replace('-', ' ') + '" applied', 'info');
+  }
+
   function handleSaveSettings($form) {
     var newSendWithCtrlEnter = $('#input-send-ctrl-enter').is(':checked');
     var historyLimit = parseInt($('#input-history-limit').val(), 10) || 25;
+    var enableDesktopNotifications = $('#input-desktop-notifications').is(':checked');
     var settings = {
       maxConcurrentAgents: parseInt($('#input-max-concurrent').val(), 10),
       claudePermissions: {
-        dangerouslySkipPermissions: $('#input-skip-permissions').is(':checked')
+        dangerouslySkipPermissions: $('#input-skip-permissions').is(':checked'),
+        defaultMode: $('#input-permission-mode').val() || 'default',
+        allowRules: parseRulesFromTextarea($('#input-allow-rules').val()),
+        denyRules: parseRulesFromTextarea($('#input-deny-rules').val())
       },
       agentPromptTemplate: $('#input-agent-prompt').val(),
       sendWithCtrlEnter: newSendWithCtrlEnter,
-      historyLimit: historyLimit
+      historyLimit: historyLimit,
+      enableDesktopNotifications: enableDesktopNotifications
     };
+
+    // Request notification permission if enabling notifications
+    if (enableDesktopNotifications && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
 
     api.updateSettings(settings)
       .done(function(updated) {
         state.resourceStatus.maxConcurrent = updated.maxConcurrentAgents;
         state.sendWithCtrlEnter = updated.sendWithCtrlEnter !== false;
         state.historyLimit = updated.historyLimit || 25;
+        state.settings = updated;
         updateRunningCount();
         updateInputHint();
         closeAllModals();
@@ -3128,7 +3292,10 @@
           .always(function() {
             state.agentStarting = false;
             setQuickActionLoading(projectId, false);
-            hideContentLoading();
+            // Only hide loading if still viewing the same project
+            if (state.selectedProjectId === projectId) {
+              hideContentLoading();
+            }
           });
         break;
       case 'stop':
@@ -3141,7 +3308,10 @@
           })
           .always(function() {
             setQuickActionLoading(projectId, false);
-            hideContentLoading();
+            // Only hide loading if still viewing the same project
+            if (state.selectedProjectId === projectId) {
+              hideContentLoading();
+            }
           });
         break;
       case 'cancel':
@@ -3155,7 +3325,10 @@
           })
           .always(function() {
             setQuickActionLoading(projectId, false);
-            hideContentLoading();
+            // Only hide loading if still viewing the same project
+            if (state.selectedProjectId === projectId) {
+              hideContentLoading();
+            }
           });
         break;
     }
@@ -3962,10 +4135,13 @@
       })
       .always(function() {
         state.agentStarting = false;
-        hideContentLoading();
-        $input.prop('disabled', false);
-        $('#btn-send-message').prop('disabled', false);
-        $input.focus();
+        // Only hide loading and re-enable inputs if still viewing the same project
+        if (state.selectedProjectId === projectId) {
+          hideContentLoading();
+          $input.prop('disabled', false);
+          $('#btn-send-message').prop('disabled', false);
+          $input.focus();
+        }
       });
   }
 
@@ -4490,8 +4666,11 @@
       .always(function() {
         state.agentStarting = false;
         setQuickActionLoading(projectId, false);
-        hideContentLoading();
-        $('#btn-start-agent').prop('disabled', false);
+        // Only hide loading and re-enable button if still viewing the same project
+        if (state.selectedProjectId === projectId) {
+          hideContentLoading();
+          $('#btn-start-agent').prop('disabled', false);
+        }
       });
   }
 
@@ -4518,8 +4697,11 @@
       })
       .always(function() {
         setQuickActionLoading(projectId, false);
-        hideContentLoading();
-        $('#btn-stop-agent').prop('disabled', false);
+        // Only hide loading and re-enable button if still viewing the same project
+        if (state.selectedProjectId === projectId) {
+          hideContentLoading();
+          $('#btn-stop-agent').prop('disabled', false);
+        }
       });
   }
 
@@ -4692,6 +4874,65 @@
       case 'roadmap_message':
         handleRoadmapMessage(message.projectId, message.data);
         break;
+      case 'agent_waiting':
+        handleAgentWaiting(message.projectId, message.data);
+        break;
+    }
+  }
+
+  function handleAgentWaiting(projectId, isWaiting) {
+    var project = findProjectById(projectId);
+
+    if (project) {
+      project.isWaitingForInput = isWaiting;
+      renderProjectList();
+
+      if (state.selectedProjectId === projectId) {
+        updateWaitingIndicator(isWaiting);
+      }
+
+      // Send desktop notification if enabled and waiting
+      if (isWaiting && state.settings && state.settings.enableDesktopNotifications) {
+        sendWaitingNotification(project);
+      }
+    }
+  }
+
+  function updateWaitingIndicator(isWaiting) {
+    var $statusBadge = $('#project-status');
+    var $waitingBadge = $('#waiting-badge');
+
+    if (isWaiting) {
+      // Add waiting badge if it doesn't exist
+      if ($waitingBadge.length === 0) {
+        $statusBadge.after('<span id="waiting-badge" class="ml-2 px-2 py-0.5 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded-full flex items-center gap-1"><span class="waiting-indicator-small"></span>Waiting</span>');
+      }
+    } else {
+      $waitingBadge.remove();
+    }
+  }
+
+  function sendWaitingNotification(project) {
+    if (!('Notification' in window)) {
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      new Notification('Claudito - Input Required', {
+        body: project.name + ' is waiting for your input',
+        icon: '/favicon.ico',
+        tag: 'waiting-' + project.id
+      });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(function(permission) {
+        if (permission === 'granted') {
+          new Notification('Claudito - Input Required', {
+            body: project.name + ' is waiting for your input',
+            icon: '/favicon.ico',
+            tag: 'waiting-' + project.id
+          });
+        }
+      });
     }
   }
 
@@ -4713,11 +4954,22 @@
       updateStartStopButtons();
     }
 
-    // Reset mode selector when agent stops
+    // Reset mode selector and waiting state when agent stops
     if (status !== 'running' && projectId === state.selectedProjectId) {
       state.currentAgentMode = null;
       $('#mode-selector').removeClass('disabled');
       updateInputArea();
+      updateWaitingIndicator(false);
+    }
+
+    // Clear waiting state in project when agent stops
+    if (status !== 'running') {
+      var project = findProjectById(projectId);
+
+      if (project && project.isWaitingForInput) {
+        project.isWaitingForInput = false;
+        renderProjectList();
+      }
     }
   }
 
@@ -5312,10 +5564,11 @@
     });
   }
 
-  // Load settings on init to get sendWithCtrlEnter preference
+  // Load settings on init to get sendWithCtrlEnter preference and notification settings
   function loadInitialSettings() {
     api.getSettings()
       .done(function(settings) {
+        state.settings = settings;
         state.sendWithCtrlEnter = settings.sendWithCtrlEnter !== false;
         updateInputHint();
       });
@@ -5330,7 +5583,19 @@
     loadResourceStatus();
     loadInitialSettings();
     loadFontSize();
+    loadDevModeStatus();
     connectWebSocket();
+  }
+
+  function loadDevModeStatus() {
+    api.getDevStatus()
+      .done(function(data) {
+        state.devMode = data.devMode;
+
+        if (state.devMode) {
+          $('#btn-toggle-dev').removeClass('hidden');
+        }
+      });
   }
 
   function loadResourceStatus() {

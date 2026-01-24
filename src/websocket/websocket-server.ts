@@ -16,10 +16,11 @@ export type WebSocketMessageData =
   | QueuedProject[]
   | AgentResourceStatus
   | RoadmapMessage
+  | boolean // For waiting status
   | string; // Covers AgentStatus and 'connected' messages
 
 export interface WebSocketMessage {
-  type: 'agent_message' | 'agent_status' | 'queue_change' | 'connected' | 'roadmap_message';
+  type: 'agent_message' | 'agent_status' | 'agent_waiting' | 'queue_change' | 'connected' | 'roadmap_message';
   projectId?: string;
   data?: WebSocketMessageData;
 }
@@ -163,6 +164,14 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
         type: 'agent_status',
         projectId,
         data: status,
+      });
+    });
+
+    this.agentManager.on('waitingForInput', (projectId, isWaiting) => {
+      this.broadcast({
+        type: 'agent_waiting',
+        projectId,
+        data: isWaiting,
       });
     });
 

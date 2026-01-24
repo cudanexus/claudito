@@ -15,6 +15,7 @@ Usage: claudito [options]
 Options:
   -p, --port <port>     Server port (default: 3000, env: PORT)
   -h, --host <host>     Server host (default: localhost, env: HOST)
+  --dev                 Enable development mode (shows Development button)
   -v, --version         Show version number
   --help                Show this help message
 
@@ -24,17 +25,28 @@ Environment Variables:
   NODE_ENV              Environment (development/production)
   LOG_LEVEL             Log level (debug/info/warn/error)
   MAX_CONCURRENT_AGENTS Maximum concurrent agents (default: 3)
+  DEV_MODE              Enable development mode (true/false)
+  CLAUDITO_DEV_MODE     Enable development mode (1 to enable)
 
 Examples:
   claudito                    Start with defaults (localhost:3000)
   claudito -p 8080            Start on port 8080
   claudito --host 0.0.0.0     Listen on all interfaces
+  claudito --dev              Start with development features
   PORT=8080 claudito          Start on port 8080 via env var
 `);
 }
 
-function parseArgs(args: string[]): { port?: number; host?: string; help?: boolean; version?: boolean } {
-  const result: { port?: number; host?: string; help?: boolean; version?: boolean } = {};
+interface CliArgs {
+  port?: number;
+  host?: string;
+  help?: boolean;
+  version?: boolean;
+  dev?: boolean;
+}
+
+function parseArgs(args: string[]): CliArgs {
+  const result: CliArgs = {};
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -62,6 +74,8 @@ function parseArgs(args: string[]): { port?: number; host?: string; help?: boole
       if (host) {
         result.host = host;
       }
+    } else if (arg === '--dev') {
+      result.dev = true;
     }
   }
 
@@ -90,6 +104,10 @@ async function main(): Promise<void> {
     process.env.HOST = args.host;
   }
 
+  if (args.dev) {
+    process.env.DEV_MODE = 'true';
+  }
+
   const configLoader = new EnvironmentConfigLoader();
   const config = configLoader.load();
 
@@ -105,6 +123,8 @@ async function main(): Promise<void> {
       .then(() => process.exit(0))
       .catch(() => process.exit(1));
   };
+
+  server.onShutdown(() => shutdown('API'));
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

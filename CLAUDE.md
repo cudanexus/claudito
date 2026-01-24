@@ -97,6 +97,8 @@ conversations/
 - `GET /api/projects/:id/debug` - Get debug info
 - `GET /api/projects/:id/claude-files` - Get CLAUDE.md files (global and project)
 - `PUT /api/projects/:id/claude-files` - Save CLAUDE.md file (body: {filePath, content})
+- `GET /api/projects/:id/permissions` - Get project permission overrides
+- `PUT /api/projects/:id/permissions` - Update project permission overrides
 
 ## WebSocket Messages
 
@@ -188,7 +190,22 @@ Agent manager runs autonomous loop that:
 ## Settings
 
 - `maxConcurrentAgents` - Maximum concurrent agents (1-10)
-- `claudePermissions.dangerouslySkipPermissions` - Skip permission prompts
 - `agentPromptTemplate` - Template for autonomous agent instructions
 - `sendWithCtrlEnter` - Input keybinding preference (true=Ctrl+Enter sends, false=Enter sends)
 - `historyLimit` - Maximum conversations in history dropdown (5-100, default: 25)
+
+## Claude Code Permissions
+
+Global permissions in `claudePermissions`:
+- `dangerouslySkipPermissions` - Skip ALL permission prompts (legacy, not recommended)
+- `defaultMode` - Permission mode: 'default' | 'acceptEdits' | 'plan'
+- `allowRules` - Array of tool rules to auto-approve (e.g., "Read", "Bash(npm run:*)")
+- `denyRules` - Array of tool rules to block (e.g., "Read(./.env)", "Bash(rm -rf:*)")
+
+Per-project overrides in `permissionOverrides` (stored in project status.json):
+- `enabled` - Whether project overrides are active
+- `allowRules` - Additional allow rules for this project
+- `denyRules` - Additional deny rules for this project
+- `defaultMode` - Override default mode for this project
+
+Permission rules follow Claude Code CLI format: `Tool` or `Tool(specifier)`

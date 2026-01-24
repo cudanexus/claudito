@@ -18,6 +18,13 @@ export interface ContextUsageData {
   percentUsed: number;
 }
 
+export interface ProjectPermissionOverrides {
+  enabled: boolean;
+  allowRules?: string[];
+  denyRules?: string[];
+  defaultMode?: 'default' | 'acceptEdits' | 'plan';
+}
+
 export interface ProjectStatus {
   id: string;
   name: string;
@@ -27,6 +34,7 @@ export interface ProjectStatus {
   nextItem: MilestoneItemRef | null;
   currentItem: MilestoneItemRef | null;
   lastContextUsage: ContextUsageData | null;
+  permissionOverrides: ProjectPermissionOverrides | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +59,7 @@ export interface ProjectRepository {
   updateCurrentItem(id: string, currentItem: MilestoneItemRef | null): Promise<ProjectStatus | null>;
   setCurrentConversation(id: string, conversationId: string | null): Promise<ProjectStatus | null>;
   updateContextUsage(id: string, contextUsage: ContextUsageData | null): Promise<ProjectStatus | null>;
+  updatePermissionOverrides(id: string, overrides: ProjectPermissionOverrides | null): Promise<ProjectStatus | null>;
   delete(id: string): Promise<boolean>;
 }
 
@@ -307,6 +316,7 @@ export class FileProjectRepository implements ProjectRepository {
       nextItem: null,
       currentItem: null,
       lastContextUsage: null,
+      permissionOverrides: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -376,6 +386,18 @@ export class FileProjectRepository implements ProjectRepository {
     }
 
     status.lastContextUsage = contextUsage;
+    this.saveStatus(status);
+    return Promise.resolve({ ...status });
+  }
+
+  updatePermissionOverrides(id: string, overrides: ProjectPermissionOverrides | null): Promise<ProjectStatus | null> {
+    const status = this.loadStatus(id);
+
+    if (!status) {
+      return Promise.resolve(null);
+    }
+
+    status.permissionOverrides = overrides;
     this.saveStatus(status);
     return Promise.resolve({ ...status });
   }

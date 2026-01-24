@@ -132,6 +132,13 @@
                 </svg>
                 Debug
               </button>
+              <button id="btn-toggle-dev" class="bg-orange-700 hover:bg-orange-600 text-white py-1 px-2.5 rounded flex items-center gap-1.5 text-sm transition-colors hidden" title="Development Options">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                Development
+              </button>
             </div>
           </div>
         </header>
@@ -568,7 +575,7 @@
   <div id="modal-settings" class="modal hidden">
     <div class="modal-backdrop"></div>
     <div class="modal-content">
-      <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-5xl">
+      <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
         <div class="p-3 border-b border-gray-700 flex items-center justify-between">
           <h3 class="font-semibold">Settings</h3>
           <button class="modal-close text-gray-400 hover:text-white">
@@ -577,22 +584,76 @@
             </svg>
           </button>
         </div>
-        <form id="form-settings" class="p-3 space-y-4">
+        <form id="form-settings" class="p-3 space-y-4 overflow-y-auto flex-1">
           <div>
             <label class="block text-xs font-medium text-gray-300 mb-1">Max Concurrent Agents</label>
             <input type="number" name="maxConcurrentAgents" id="input-max-concurrent" min="1" max="10" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-purple-500">
             <p class="text-xs text-gray-500 mt-1">Maximum agents that can run simultaneously (1-10)</p>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-300 mb-2">Claude Code Permissions</label>
-            <div class="space-y-2">
+
+          <!-- Permission Configuration Section -->
+          <div class="border border-gray-700 rounded-lg p-3">
+            <h4 class="text-sm font-medium text-gray-200 mb-3 flex items-center gap-2">
+              <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+              </svg>
+              Claude Code Permissions
+            </h4>
+
+            <!-- Skip Permissions Toggle (Legacy) -->
+            <div class="mb-4 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded">
               <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" name="dangerouslySkipPermissions" id="input-skip-permissions" class="rounded bg-gray-700 border-gray-600 text-purple-500 focus:ring-purple-500">
-                <span class="text-sm text-gray-300">Skip permission prompts</span>
+                <input type="checkbox" name="dangerouslySkipPermissions" id="input-skip-permissions" class="rounded bg-gray-700 border-gray-600 text-yellow-500 focus:ring-yellow-500">
+                <span class="text-sm text-yellow-300">Skip ALL permission prompts (dangerous)</span>
               </label>
-              <p class="text-xs text-gray-500 ml-6">Allow Claude to execute commands without confirmation (use with caution)</p>
+              <p class="text-xs text-yellow-400/70 mt-1 ml-6">When enabled, ignores all permission rules below. Use with extreme caution.</p>
+            </div>
+
+            <!-- Permission Mode -->
+            <div class="mb-4">
+              <label class="block text-xs font-medium text-gray-300 mb-1">Default Permission Mode</label>
+              <select id="input-permission-mode" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-purple-500">
+                <option value="default">Default (ask for each action)</option>
+                <option value="acceptEdits">Accept Edits (auto-approve file edits)</option>
+                <option value="plan">Plan Mode (review plan before execution)</option>
+              </select>
+              <p class="text-xs text-gray-500 mt-1">How Claude handles permission requests by default</p>
+            </div>
+
+            <!-- Allow Rules -->
+            <div class="mb-4">
+              <label class="block text-xs font-medium text-gray-300 mb-1">Allow Rules (auto-approve these)</label>
+              <textarea id="input-allow-rules" rows="3" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-purple-500" placeholder="One rule per line, e.g.:&#10;Read&#10;Bash(npm run:*)&#10;Bash(git status)"></textarea>
+              <p class="text-xs text-gray-500 mt-1">Tools that will be allowed without prompting. Format: <code class="text-purple-400">Tool</code> or <code class="text-purple-400">Tool(specifier)</code></p>
+            </div>
+
+            <!-- Deny Rules -->
+            <div class="mb-4">
+              <label class="block text-xs font-medium text-gray-300 mb-1">Deny Rules (block these)</label>
+              <textarea id="input-deny-rules" rows="3" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-purple-500" placeholder="One rule per line, e.g.:&#10;Read(./.env)&#10;Bash(rm -rf:*)&#10;Bash(curl:*)"></textarea>
+              <p class="text-xs text-gray-500 mt-1">Tools that will be blocked entirely. These take priority over allow rules.</p>
+            </div>
+
+            <!-- Common Presets -->
+            <div>
+              <label class="block text-xs font-medium text-gray-300 mb-2">Quick Presets</label>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="permission-preset bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded transition-colors" data-preset="safe-dev">
+                  Safe Development
+                </button>
+                <button type="button" class="permission-preset bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded transition-colors" data-preset="git-only">
+                  Git Only
+                </button>
+                <button type="button" class="permission-preset bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded transition-colors" data-preset="read-only">
+                  Read Only
+                </button>
+                <button type="button" class="permission-preset bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded transition-colors" data-preset="clear-all">
+                  Clear All
+                </button>
+              </div>
             </div>
           </div>
+
           <div>
             <label class="block text-xs font-medium text-gray-300 mb-1">Agent Prompt Template</label>
             <textarea name="agentPromptTemplate" id="input-agent-prompt" rows="8" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm font-mono textarea-resizable"></textarea>
@@ -612,6 +673,16 @@
             <label class="block text-xs font-medium text-gray-300 mb-1">History Limit</label>
             <input type="number" name="historyLimit" id="input-history-limit" min="5" max="100" class="w-32 bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-purple-500">
             <p class="text-xs text-gray-500 mt-1">Maximum number of conversations shown in history (5-100)</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-300 mb-2">Desktop Notifications</label>
+            <div class="space-y-2">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" name="enableDesktopNotifications" id="input-desktop-notifications" class="rounded bg-gray-700 border-gray-600 text-purple-500 focus:ring-purple-500">
+                <span class="text-sm text-gray-300">Enable desktop notifications</span>
+              </label>
+              <p class="text-xs text-gray-500 ml-6">Get notified when an agent is waiting for your input</p>
+            </div>
           </div>
           <div class="flex justify-end gap-2 pt-2 border-t border-gray-700">
             <button type="button" class="modal-close px-3 py-1.5 text-sm text-gray-300 hover:text-white transition-colors">Cancel</button>
@@ -981,6 +1052,39 @@
               <!-- All processes will be rendered here -->
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Development Modal -->
+  <div id="modal-dev" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
+        <div class="p-3 border-b border-gray-700 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+            <h3 class="font-semibold">Development Options</h3>
+          </div>
+          <button class="modal-close text-gray-400 hover:text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="p-4 space-y-3">
+          <p class="text-xs text-gray-400 mb-4">Development mode options for testing and debugging.</p>
+          <button id="btn-dev-shutdown" class="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded flex items-center justify-center gap-2 text-sm transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+            </svg>
+            Shutdown Server
+          </button>
+          <p class="text-xs text-gray-500 text-center">Stops the server process. Useful for development hot-reload.</p>
         </div>
       </div>
     </div>

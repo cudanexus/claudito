@@ -24,6 +24,8 @@ let sharedRoadmapGenerator: RoadmapGenerator | null = null;
 export interface ApiRouterDependencies {
   agentManager?: AgentManager;
   maxConcurrentAgents?: number;
+  devMode?: boolean;
+  onShutdown?: () => void;
 }
 
 export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
@@ -61,6 +63,27 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
       status: 'ok',
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // Dev mode status
+  router.get('/dev', (_req, res) => {
+    res.json({
+      devMode: deps.devMode || false,
+    });
+  });
+
+  // Shutdown endpoint (only works in dev mode)
+  router.post('/dev/shutdown', (_req, res) => {
+    if (!deps.devMode) {
+      res.status(403).json({ error: 'Shutdown only available in dev mode' });
+      return;
+    }
+
+    res.json({ message: 'Shutting down...' });
+
+    if (deps.onShutdown) {
+      setTimeout(() => deps.onShutdown!(), 100);
+    }
   });
 
   // Agent resource status

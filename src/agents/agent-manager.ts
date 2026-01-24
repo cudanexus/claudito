@@ -8,7 +8,9 @@ import {
   AgentMode,
   ProcessInfo,
   ContextUsage,
+  PermissionConfig,
 } from './claude-agent';
+import { DefaultPermissionGenerator, PermissionGenerator } from '../services/permission-generator';
 import {
   ProjectRepository,
   MilestoneItemRef,
@@ -26,6 +28,7 @@ import { getLogger, Logger, getPidTracker, PidTracker } from '../utils';
 export interface AgentManagerEvents {
   message: (projectId: string, message: AgentMessage) => void;
   status: (projectId: string, status: AgentStatus) => void;
+  waitingForInput: (projectId: string, isWaiting: boolean) => void;
   queueChange: (queue: QueuedProject[]) => void;
   milestoneStarted: (projectId: string, milestone: MilestoneRef) => void;
   milestoneCompleted: (projectId: string, milestone: MilestoneRef, reason: string) => void;
@@ -94,6 +97,7 @@ export interface AgentManager {
   getAgentMode(projectId: string): AgentMode | null;
   isRunning(projectId: string): boolean;
   isQueued(projectId: string): boolean;
+  isWaitingForInput(projectId: string): boolean;
   getResourceStatus(): AgentResourceStatus;
   removeFromQueue(projectId: string): void;
   setMaxConcurrentAgents(max: number): void;
@@ -112,11 +116,11 @@ export interface AgentManager {
 }
 
 export interface AgentFactory {
-  create(projectId: string, projectPath: string, mode: AgentMode): ClaudeAgent;
+  create(projectId: string, projectPath: string, mode: AgentMode, permissions?: PermissionConfig): ClaudeAgent;
 }
 
 const defaultAgentFactory: AgentFactory = {
-  create: (projectId, projectPath, mode) => new DefaultClaudeAgent({ projectId, projectPath, mode }),
+  create: (projectId, projectPath, mode, permissions) => new DefaultClaudeAgent({ projectId, projectPath, mode, permissions }),
 };
 
 export interface AgentManagerDependencies {
@@ -126,6 +130,7 @@ export interface AgentManagerDependencies {
   instructionGenerator: InstructionGenerator;
   roadmapParser: RoadmapParser;
   agentFactory?: AgentFactory;
+  permissionGenerator?: PermissionGenerator;
   maxConcurrentAgents?: number;
 }
 
@@ -150,12 +155,14 @@ export class DefaultAgentManager implements AgentManager {
   private readonly instructionGenerator: InstructionGenerator;
   private readonly roadmapParser: RoadmapParser;
   private readonly agentFactory: AgentFactory;
+  private readonly permissionGenerator: PermissionGenerator;
   private _maxConcurrentAgents: number;
   private readonly logger: Logger;
   private readonly pidTracker: PidTracker;
   private readonly listeners: EventListeners = {
     message: new Set(),
     status: new Set(),
+    waitingForInput: new Set(),
     queueChange: new Set(),
     milestoneStarted: new Set(),
     milestoneCompleted: new Set(),
@@ -170,6 +177,7 @@ export class DefaultAgentManager implements AgentManager {
     this.instructionGenerator = deps.instructionGenerator;
     this.roadmapParser = deps.roadmapParser;
     this.agentFactory = deps.agentFactory || defaultAgentFactory;
+    this.permissionGenerator = deps.permissionGenerator || new DefaultPermissionGenerator();
     this._maxConcurrentAgents = deps.maxConcurrentAgents ?? 3;
     this.logger = getLogger('agent-manager');
     this.pidTracker = getPidTracker();
@@ -544,7 +552,19 @@ export class DefaultAgentManager implements AgentManager {
     instructions: string,
     mode: AgentMode = 'autonomous'
   ): Promise<void> {
-    const agent = this.agentFactory.create(projectId, projectPath, mode);
+    const settings = await this.settingsRepository.get();
+    const project = await this.projectRepository.findById(projectId);
+    const projectOverrides = project?.permissionOverrides ?? null;
+    const permArgs = this.permissionGenerator.generateArgs(settings.claudePermissions, projectOverrides);
+
+    const permissions: PermissionConfig = {
+      skipPermissions: permArgs.skipPermissions,
+      allowedTools: permArgs.allowedTools,
+      disallowedTools: permArgs.disallowedTools,
+      permissionMode: permArgs.permissionMode,
+    };
+
+    const agent = this.agentFactory.create(projectId, projectPath, mode, permissions);
     this.setupAgentListeners(agent);
     this.agents.set(projectId, agent);
 
@@ -619,6 +639,11 @@ export class DefaultAgentManager implements AgentManager {
     return this.queue.some((q) => q.projectId === projectId);
   }
 
+  isWaitingForInput(projectId: string): boolean {
+    const agent = this.agents.get(projectId);
+    return agent?.isWaitingForInput ?? false;
+  }
+
   getResourceStatus(): AgentResourceStatus {
     return {
       runningCount: this.agents.size,
@@ -689,12 +714,17 @@ export class DefaultAgentManager implements AgentManager {
       void this.handleStatusChange(agent.projectId, status);
     };
 
+    const waitingListener = (isWaiting: boolean): void => {
+      this.emit('waitingForInput', agent.projectId, isWaiting);
+    };
+
     const exitListener = (code: number | null): void => {
       void this.handleAgentExit(agent, code);
     };
 
     agent.on('message', messageListener);
     agent.on('status', statusListener);
+    agent.on('waitingForInput', waitingListener);
     agent.on('exit', exitListener);
   }
 

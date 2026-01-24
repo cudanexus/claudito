@@ -1,7 +1,7 @@
 import { ChildProcess, spawn, exec } from 'child_process';
 import { EventEmitter } from 'events';
 
-import { getLogger, Logger } from '../utils/logger.js';
+import { getLogger, Logger } from '../utils/logger';
 
 export type AgentStatus = 'stopped' | 'running' | 'error';
 export type AgentMode = 'autonomous' | 'interactive';
@@ -45,6 +45,7 @@ export interface AgentEvents {
   message: (message: AgentMessage) => void;
   status: (status: AgentStatus) => void;
   exit: (code: number | null) => void;
+  waitingForInput: (isWaiting: boolean) => void;
 }
 
 export interface ProcessInfo {
@@ -73,6 +74,7 @@ export interface ClaudeAgent {
   readonly contextUsage: ContextUsage | null;
   readonly queuedMessageCount: number;
   readonly queuedMessages: string[];
+  readonly isWaitingForInput: boolean;
   start(instructions: string): void;
   stop(): Promise<void>;
   sendInput(input: string): void;
@@ -128,11 +130,20 @@ interface StreamEvent {
   usage?: StreamEventUsage;
 }
 
+export interface PermissionConfig {
+  skipPermissions: boolean;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  permissionMode?: 'default' | 'acceptEdits' | 'plan';
+}
+
 export interface ClaudeAgentConfig {
   projectId: string;
   projectPath: string;
   mode?: AgentMode;
+  /** @deprecated Use permissions instead */
   skipPermissions?: boolean;
+  permissions?: PermissionConfig;
   processSpawner?: ProcessSpawner;
 }
 
@@ -140,7 +151,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   readonly projectId: string;
   private readonly projectPath: string;
   private readonly _mode: AgentMode;
-  private readonly _skipPermissions: boolean;
+  private readonly _permissions: PermissionConfig;
   private readonly processSpawner: ProcessSpawner;
   private readonly emitter: EventEmitter;
   private readonly logger: Logger;
@@ -162,7 +173,9 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.projectId = config.projectId;
     this.projectPath = config.projectPath;
     this._mode = config.mode || 'interactive';
-    this._skipPermissions = config.skipPermissions ?? true;
+    this._permissions = config.permissions ?? {
+      skipPermissions: config.skipPermissions ?? true,
+    };
     this.processSpawner = config.processSpawner || defaultSpawner;
     this.emitter = new EventEmitter();
     this.logger = getLogger('ClaudeAgent').withProject(config.projectId);
@@ -198,6 +211,12 @@ export class DefaultClaudeAgent implements ClaudeAgent {
 
   get queuedMessages(): string[] {
     return [...this.inputQueue];
+  }
+
+  get isWaitingForInput(): boolean {
+    // In interactive mode, waiting when running but not processing
+    // In autonomous mode, never waiting (unless there's a question)
+    return this._mode === 'interactive' && this._status === 'running' && !this.isProcessing;
   }
 
   start(instructions: string): void {
@@ -403,7 +422,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
       return;
     }
 
-    this.isProcessing = true;
+    this.setProcessing(true);
 
     // Check if input is a JSON array (multimodal content)
     let content: string | unknown[] = input;
@@ -450,6 +469,16 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.writeInputToStdin(nextInput);
   }
 
+  private setProcessing(processing: boolean): void {
+    const wasWaiting = this.isWaitingForInput;
+    this.isProcessing = processing;
+    const isWaiting = this.isWaitingForInput;
+
+    if (wasWaiting !== isWaiting) {
+      this.emitter.emit('waitingForInput', isWaiting);
+    }
+  }
+
   on<K extends keyof AgentEvents>(event: K, listener: AgentEvents[K]): void {
     this.emitter.on(event, listener);
   }
@@ -464,9 +493,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // Use --print mode for non-interactive piped I/O
     args.push('--print');
 
-    if (this._skipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    }
+    // Add permission-related arguments
+    this.addPermissionArgs(args);
 
     // stream-json for both input and output (only works with --print)
     args.push('--input-format', 'stream-json');
@@ -474,6 +502,25 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     args.push('--verbose');
 
     return args;
+  }
+
+  private addPermissionArgs(args: string[]): void {
+    if (this._permissions.skipPermissions) {
+      args.push('--dangerously-skip-permissions');
+      return;
+    }
+
+    if (this._permissions.permissionMode && this._permissions.permissionMode !== 'default') {
+      args.push('--permission-mode', this._permissions.permissionMode);
+    }
+
+    if (this._permissions.allowedTools && this._permissions.allowedTools.length > 0) {
+      args.push('--allowedTools', ...this._permissions.allowedTools);
+    }
+
+    if (this._permissions.disallowedTools && this._permissions.disallowedTools.length > 0) {
+      args.push('--disallowedTools', ...this._permissions.disallowedTools);
+    }
   }
 
   private setupProcessHandlers(): void {
@@ -596,6 +643,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
           direction: 'output',
           eventType: 'content_block_stop',
         });
+        // Emit tool result to update the tool's status in the UI
+        this.emitToolResult('completed');
         break;
 
       case 'result':
@@ -605,7 +654,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
           subtype: event.subtype,
         });
         this.emitMessage('system', `Result: ${event.subtype || 'completed'}`);
-        this.isProcessing = false;
+        this.setProcessing(false);
         this.processNextQueuedInput();
         break;
 
@@ -703,6 +752,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   }
 
   private toolCounter = 0;
+  private activeToolId: string | null = null;
+  private activeToolName: string | null = null;
 
   private emitToolMessage(name: string, input?: Record<string, unknown>): void {
     // Handle AskUserQuestion specially
@@ -712,6 +763,9 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     }
 
     const toolId = `tool-${Date.now()}-${++this.toolCounter}`;
+    this.activeToolId = toolId;
+    this.activeToolName = name;
+
     const toolInfo: ToolUseInfo = {
       id: toolId,
       name,
@@ -729,6 +783,29 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     };
 
     this.emitter.emit('message', message);
+  }
+
+  private emitToolResult(status: 'completed' | 'failed'): void {
+    if (!this.activeToolId || !this.activeToolName) {
+      return;
+    }
+
+    const toolInfo: ToolUseInfo = {
+      id: this.activeToolId,
+      name: this.activeToolName,
+      status,
+    };
+
+    const message: AgentMessage = {
+      type: 'tool_result',
+      content: `Tool ${this.activeToolName} ${status}`,
+      timestamp: new Date().toISOString(),
+      toolInfo,
+    };
+
+    this.emitter.emit('message', message);
+    this.activeToolId = null;
+    this.activeToolName = null;
   }
 
   private emitQuestionMessage(input: Record<string, unknown>): void {

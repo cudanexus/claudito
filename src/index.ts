@@ -26,6 +26,8 @@ async function main(): Promise<void> {
       .catch(() => process.exit(1));
   };
 
+  server.onShutdown(() => shutdown('API'));
+
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 

@@ -4,7 +4,7 @@ import path from 'path';
 import { AppConfig } from '../config';
 import { createApiRouter, getAgentManager, getRoadmapGenerator } from '../routes';
 import { DefaultWebSocketServer, ProjectWebSocketServer } from '../websocket';
-import { createErrorHandler } from '../utils';
+import { createErrorHandler, formatAccessibleUrls } from '../utils';
 
 export interface HttpServer {
   start(): Promise<void>;
@@ -17,6 +17,8 @@ export interface ServerDependencies {
 
 export interface ExpressAppOptions {
   maxConcurrentAgents?: number;
+  devMode?: boolean;
+  onShutdown?: () => void;
 }
 
 export function createExpressApp(options: ExpressAppOptions = {}): Application {
@@ -30,6 +32,8 @@ export function createExpressApp(options: ExpressAppOptions = {}): Application {
 
   app.use('/api', createApiRouter({
     maxConcurrentAgents: options.maxConcurrentAgents,
+    devMode: options.devMode,
+    onShutdown: options.onShutdown,
   }));
 
   app.use(createErrorHandler());
@@ -42,12 +46,25 @@ export class ExpressHttpServer implements HttpServer {
   private wsServer: ProjectWebSocketServer | null = null;
   private readonly app: Application;
   private readonly config: AppConfig;
+  private shutdownCallback?: () => void;
 
   constructor(deps: ServerDependencies) {
     this.config = deps.config;
     this.app = createExpressApp({
       maxConcurrentAgents: this.config.maxConcurrentAgents,
+      devMode: this.config.devMode,
+      onShutdown: () => this.triggerShutdown(),
     });
+  }
+
+  onShutdown(callback: () => void): void {
+    this.shutdownCallback = callback;
+  }
+
+  private triggerShutdown(): void {
+    if (this.shutdownCallback) {
+      this.shutdownCallback();
+    }
   }
 
   async start(): Promise<void> {
@@ -59,7 +76,7 @@ export class ExpressHttpServer implements HttpServer {
       this.initializeWebSocket();
 
       this.httpServer.listen(this.config.port, this.config.host, () => {
-        console.log(`Server running at http://${this.config.host}:${this.config.port}`);
+        this.logAccessibleUrls();
         resolve();
       });
     });
@@ -130,5 +147,17 @@ export class ExpressHttpServer implements HttpServer {
       roadmapGenerator: roadmapGenerator || undefined,
     });
     this.wsServer.initialize(this.httpServer);
+  }
+
+  private logAccessibleUrls(): void {
+    const urls = formatAccessibleUrls(this.config.host, this.config.port);
+
+    console.log('\nServer running at:');
+
+    for (const url of urls) {
+      console.log(`  ${url}`);
+    }
+
+    console.log('');
   }
 }

@@ -4,6 +4,7 @@ export interface AppConfig {
   env: 'development' | 'production' | 'test';
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   maxConcurrentAgents: number;
+  devMode: boolean;
 }
 
 export interface ConfigLoader {
@@ -18,6 +19,7 @@ export class EnvironmentConfigLoader implements ConfigLoader {
       env: this.parseEnv(),
       logLevel: this.parseLogLevel(),
       maxConcurrentAgents: this.parseMaxConcurrentAgents(),
+      devMode: process.env['DEV_MODE'] === 'true' || process.env['CLAUDITO_DEV_MODE'] === '1',
     };
   }
 

@@ -4,6 +4,8 @@
 [![CI](https://github.com/anthropics/claudito/actions/workflows/ci.yml/badge.svg)](https://github.com/anthropics/claudito/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **Warning**: This project is under active development. Features may change, and bugs are expected. Use at your own risk.
+
 A web-based manager for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents. Run and monitor multiple Claude agents across different projects with a modern UI.
 
 ![Claudito Screenshot](doc/images/preview-01.png)
@@ -202,10 +204,68 @@ Access settings via the gear icon in the UI sidebar.
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `maxConcurrentAgents` | Maximum simultaneous agents (1-10) | `3` |
-| `dangerouslySkipPermissions` | Skip Claude permission prompts | `true` |
 | `sendWithCtrlEnter` | Ctrl+Enter sends (true) or Enter sends (false) | `true` |
 | `historyLimit` | Max conversations in history | `25` |
 | `agentPromptTemplate` | Template for autonomous mode instructions | (see below) |
+
+### Permission Configuration
+
+Control what Claude agents can do without prompting. Access via Settings > Claude Code Permissions.
+
+#### Permission Modes
+
+| Mode | Description |
+|------|-------------|
+| `default` | Ask for each action |
+| `acceptEdits` | Auto-approve file edits |
+| `plan` | Review plan before execution |
+
+#### Permission Rules
+
+Rules follow the format: `Tool` or `Tool(specifier)`
+
+**Examples:**
+- `Read` - Allow all file reads
+- `Bash(npm run:*)` - Allow npm run commands
+- `Bash(git status)` - Allow specific command
+- `Read(./.env)` - Deny reading .env files (use in deny rules)
+
+#### Allow Rules (auto-approve)
+Tools that execute without prompting:
+```
+Read
+Glob
+Grep
+Bash(npm run:*)
+Bash(git status)
+Bash(git diff:*)
+```
+
+#### Deny Rules (block)
+Tools that are blocked entirely (take priority over allow rules):
+```
+Read(./.env)
+Read(./.env.*)
+Bash(rm -rf:*)
+Bash(curl:*)
+```
+
+#### Quick Presets
+
+| Preset | Description |
+|--------|-------------|
+| Safe Development | Common dev tools, blocks dangerous commands |
+| Git Only | Read access + git commands |
+| Read Only | File reading only, no writes or commands |
+| Clear All | Remove all rules |
+
+#### Skip All Permissions (Legacy)
+
+The "Skip ALL permission prompts" toggle uses `--dangerously-skip-permissions` which bypasses all checks. This is not recommended for production use.
+
+#### Per-Project Overrides
+
+Each project can have its own permission overrides that extend the global rules. Access via the project's settings menu.
 
 ### Agent Prompt Template
 
