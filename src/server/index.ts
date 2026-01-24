@@ -1,5 +1,6 @@
-import express, { Application } from 'express';
+import express, { Application, Request, Response } from 'express';
 import { Server, createServer } from 'http';
+import fs from 'fs';
 import path from 'path';
 import { AppConfig } from '../config';
 import { createApiRouter, getAgentManager, getRoadmapGenerator } from '../routes';
@@ -28,6 +29,11 @@ export function createExpressApp(options: ExpressAppOptions = {}): Application {
   app.use(express.urlencoded({ extended: true }));
 
   const publicPath = path.join(__dirname, '../../public');
+
+  app.get('/', (_req: Request, res: Response) => {
+    serveIndexWithCacheBusting(publicPath, res);
+  });
+
   app.use(express.static(publicPath));
 
   app.use('/api', createApiRouter({
@@ -39,6 +45,30 @@ export function createExpressApp(options: ExpressAppOptions = {}): Application {
   app.use(createErrorHandler());
 
   return app;
+}
+
+function serveIndexWithCacheBusting(publicPath: string, res: Response): void {
+  const indexPath = path.join(publicPath, 'index.html');
+
+  try {
+    let html = fs.readFileSync(indexPath, 'utf-8');
+    const timestamp = Date.now();
+
+    html = html.replace(
+      /(<(?:script|link)[^>]*(?:src|href)=["'])([^"']+\.(?:js|css))([^"']*["'])/gi,
+      (match, prefix, url, suffix) => {
+        if (url.startsWith('/vendor/')) {
+          return match;
+        }
+        const separator = url.includes('?') ? '&' : '?';
+        return `${prefix}${url}${separator}v=${timestamp}${suffix}`;
+      }
+    );
+
+    res.type('html').send(html);
+  } catch {
+    res.status(500).send('Error loading page');
+  }
 }
 
 export class ExpressHttpServer implements HttpServer {
@@ -71,8 +101,23 @@ export class ExpressHttpServer implements HttpServer {
     // Cleanup any orphan processes from previous runs
     await this.cleanupOrphanProcesses();
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.httpServer = createServer(this.app);
+
+      this.httpServer.on('error', (err: NodeJS.ErrnoException) => {
+        const address = `${this.config.host}:${this.config.port}`;
+
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${this.config.port} is already in use`));
+        } else if (err.code === 'EADDRNOTAVAIL') {
+          reject(new Error(`Cannot bind to address ${address}: address not available`));
+        } else if (err.code === 'EACCES') {
+          reject(new Error(`Cannot bind to ${address}: permission denied`));
+        } else {
+          reject(new Error(`Failed to start server on ${address}: ${err.message}`));
+        }
+      });
+
       this.initializeWebSocket();
 
       this.httpServer.listen(this.config.port, this.config.host, () => {
@@ -116,6 +161,12 @@ export class ExpressHttpServer implements HttpServer {
       await agentManager.stopAllAgents();
     }
 
+    // Close WebSocket server and all connections before closing HTTP server
+    if (this.wsServer) {
+      this.wsServer.close();
+      this.wsServer = null;
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.httpServer) {
         resolve();
@@ -128,7 +179,6 @@ export class ExpressHttpServer implements HttpServer {
           return;
         }
         this.httpServer = null;
-        this.wsServer = null;
         resolve();
       });
     });

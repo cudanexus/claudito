@@ -8,11 +8,18 @@ interface UpdateSettingsBody {
   agentPromptTemplate?: string;
   sendWithCtrlEnter?: boolean;
   historyLimit?: number;
+  enableDesktopNotifications?: boolean;
+  appendSystemPrompt?: string;
+}
+
+export interface SettingsChangeEvent {
+  maxConcurrentAgents?: number;
+  appendSystemPromptChanged?: boolean;
 }
 
 export interface SettingsRouterDependencies {
   settingsRepository: SettingsRepository;
-  onSettingsChange?: (settings: { maxConcurrentAgents: number }) => void;
+  onSettingsChange?: (event: SettingsChangeEvent) => void;
 }
 
 export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
@@ -26,7 +33,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
 
   router.put('/', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as UpdateSettingsBody;
-    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit } = body;
+    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt } = body;
 
     if (maxConcurrentAgents !== undefined && (typeof maxConcurrentAgents !== 'number' || maxConcurrentAgents < 1)) {
       throw new ValidationError('maxConcurrentAgents must be a positive number');
@@ -38,16 +45,36 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
       validatePermissionRules(claudePermissions.askRules, 'askRules');
     }
 
+    // Get current settings to detect changes
+    const currentSettings = await settingsRepository.get();
+    const appendSystemPromptChanged = appendSystemPrompt !== undefined &&
+      appendSystemPrompt !== currentSettings.appendSystemPrompt;
+
     const updated = await settingsRepository.update({
       maxConcurrentAgents,
       claudePermissions,
       agentPromptTemplate,
       sendWithCtrlEnter,
       historyLimit,
+      enableDesktopNotifications,
+      appendSystemPrompt,
     });
 
-    if (onSettingsChange && maxConcurrentAgents !== undefined) {
-      onSettingsChange({ maxConcurrentAgents });
+    // Notify about settings changes
+    if (onSettingsChange) {
+      const changeEvent: SettingsChangeEvent = {};
+
+      if (maxConcurrentAgents !== undefined) {
+        changeEvent.maxConcurrentAgents = maxConcurrentAgents;
+      }
+
+      if (appendSystemPromptChanged) {
+        changeEvent.appendSystemPromptChanged = true;
+      }
+
+      if (Object.keys(changeEvent).length > 0) {
+        onSettingsChange(changeEvent);
+      }
     }
 
     res.json(updated);

@@ -99,8 +99,17 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
   // Settings routes
   router.use('/settings', createSettingsRouter({
     settingsRepository,
-    onSettingsChange: (settings) => {
-      agentManager.setMaxConcurrentAgents(settings.maxConcurrentAgents);
+    onSettingsChange: (event) => {
+      if (event.maxConcurrentAgents !== undefined) {
+        agentManager.setMaxConcurrentAgents(event.maxConcurrentAgents);
+      }
+
+      if (event.appendSystemPromptChanged) {
+        // Restart all running agents to apply the new system prompt
+        agentManager.restartAllRunningAgents().catch((error) => {
+          console.error('Failed to restart agents after settings change:', error);
+        });
+      }
     },
   }));
 

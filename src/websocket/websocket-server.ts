@@ -29,6 +29,7 @@ export interface ProjectWebSocketServer {
   initialize(httpServer: Server): void;
   broadcast(message: WebSocketMessage): void;
   broadcastToProject(projectId: string, message: WebSocketMessage): void;
+  close(): void;
 }
 
 export interface WebSocketServerDependencies {
@@ -84,6 +85,26 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
         client.send(data);
       }
     });
+  }
+
+  close(): void {
+    if (!this.wss) {
+      return;
+    }
+
+    this.logger.debug('Closing WebSocket server');
+
+    // Close all client connections
+    this.wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.close(1001, 'Server shutting down');
+      }
+    });
+
+    // Close the WebSocket server
+    this.wss.close();
+    this.wss = null;
+    this.projectSubscriptions.clear();
   }
 
   private handleConnection(ws: WebSocket): void {

@@ -87,9 +87,16 @@ export interface ImageData {
   data: string; // Base64 encoded image data
 }
 
+export interface StartInteractiveAgentOptions {
+  initialMessage?: string;
+  images?: ImageData[];
+  sessionId?: string;
+  permissionMode?: 'default' | 'acceptEdits' | 'plan';
+}
+
 export interface AgentManager {
   startAgent(projectId: string, instructions: string): Promise<void>;
-  startInteractiveAgent(projectId: string, initialMessage?: string, images?: ImageData[]): Promise<void>;
+  startInteractiveAgent(projectId: string, options?: StartInteractiveAgentOptions): Promise<void>;
   sendInput(projectId: string, input: string, images?: ImageData[]): void;
   stopAgent(projectId: string): Promise<void>;
   stopAllAgents(): Promise<void>;
@@ -109,18 +116,22 @@ export interface AgentManager {
   getContextUsage(projectId: string): ContextUsage | null;
   getQueuedMessageCount(projectId: string): number;
   getQueuedMessages(projectId: string): string[];
+  removeQueuedMessage(projectId: string, index: number): boolean;
+  getSessionId(projectId: string): string | null;
   getTrackedProcesses(): TrackedProcessInfo[];
   cleanupOrphanProcesses(): Promise<OrphanCleanupResult>;
+  restartAllRunningAgents(): Promise<void>;
+  getRunningProjectIds(): string[];
   on<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
   off<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
 }
 
 export interface AgentFactory {
-  create(projectId: string, projectPath: string, mode: AgentMode, permissions?: PermissionConfig): ClaudeAgent;
+  create(projectId: string, projectPath: string, mode: AgentMode, permissions?: PermissionConfig, sessionId?: string): ClaudeAgent;
 }
 
 const defaultAgentFactory: AgentFactory = {
-  create: (projectId, projectPath, mode, permissions) => new DefaultClaudeAgent({ projectId, projectPath, mode, permissions }),
+  create: (projectId, projectPath, mode, permissions, sessionId) => new DefaultClaudeAgent({ projectId, projectPath, mode, permissions, sessionId }),
 };
 
 export interface AgentManagerDependencies {
@@ -215,7 +226,7 @@ export class DefaultAgentManager implements AgentManager {
     await this.startAgentImmediately(projectId, project.path, instructions);
   }
 
-  async startInteractiveAgent(projectId: string, initialMessage?: string, images?: ImageData[]): Promise<void> {
+  async startInteractiveAgent(projectId: string, options?: StartInteractiveAgentOptions): Promise<void> {
     if (this.agents.has(projectId)) {
       throw new Error('Agent is already running for this project');
     }
@@ -230,18 +241,18 @@ export class DefaultAgentManager implements AgentManager {
       throw new Error('Project not found');
     }
 
+    const { initialMessage, images, sessionId, permissionMode } = options || {};
+
     this.logger.withProject(projectId).info('Starting interactive agent', {
       hasMessage: !!initialMessage,
       imageCount: images?.length || 0,
+      resumingSession: !!sessionId,
+      permissionMode,
     });
-
-    // Create a new conversation for this interactive session
-    const conversation = await this.conversationRepository.create(projectId, null);
-    await this.projectRepository.setCurrentConversation(projectId, conversation.id);
 
     // Build multimodal instructions if images are provided
     const instructions = this.buildMultimodalContent(initialMessage || '', images);
-    await this.startAgentImmediately(projectId, project.path, instructions, 'interactive');
+    await this.startAgentImmediately(projectId, project.path, instructions, 'interactive', sessionId, permissionMode);
   }
 
   sendInput(projectId: string, input: string, images?: ImageData[]): void {
@@ -393,6 +404,21 @@ export class DefaultAgentManager implements AgentManager {
   getQueuedMessages(projectId: string): string[] {
     const agent = this.agents.get(projectId);
     return agent?.queuedMessages || [];
+  }
+
+  removeQueuedMessage(projectId: string, index: number): boolean {
+    const agent = this.agents.get(projectId);
+
+    if (!agent) {
+      return false;
+    }
+
+    return agent.removeQueuedMessage(index);
+  }
+
+  getSessionId(projectId: string): string | null {
+    const agent = this.agents.get(projectId);
+    return agent?.sessionId || null;
   }
 
   private async runNextMilestone(projectId: string): Promise<void> {
@@ -550,7 +576,9 @@ export class DefaultAgentManager implements AgentManager {
     projectId: string,
     projectPath: string,
     instructions: string,
-    mode: AgentMode = 'autonomous'
+    mode: AgentMode = 'autonomous',
+    sessionId?: string,
+    permissionModeOverride?: 'default' | 'acceptEdits' | 'plan'
   ): Promise<void> {
     const settings = await this.settingsRepository.get();
     const project = await this.projectRepository.findById(projectId);
@@ -561,10 +589,12 @@ export class DefaultAgentManager implements AgentManager {
       skipPermissions: permArgs.skipPermissions,
       allowedTools: permArgs.allowedTools,
       disallowedTools: permArgs.disallowedTools,
-      permissionMode: permArgs.permissionMode,
+      // Use override if provided, otherwise use settings
+      permissionMode: permissionModeOverride || permArgs.permissionMode,
+      appendSystemPrompt: settings.appendSystemPrompt,
     };
 
-    const agent = this.agentFactory.create(projectId, projectPath, mode, permissions);
+    const agent = this.agentFactory.create(projectId, projectPath, mode, permissions, sessionId);
     this.setupAgentListeners(agent);
     this.agents.set(projectId, agent);
 
@@ -669,6 +699,51 @@ export class DefaultAgentManager implements AgentManager {
 
   async cleanupOrphanProcesses(): Promise<OrphanCleanupResult> {
     return this.pidTracker.cleanupOrphanProcesses();
+  }
+
+  getRunningProjectIds(): string[] {
+    return Array.from(this.agents.keys());
+  }
+
+  async restartAllRunningAgents(): Promise<void> {
+    const runningProjectIds = this.getRunningProjectIds();
+
+    if (runningProjectIds.length === 0) {
+      return;
+    }
+
+    this.logger.info('Restarting all running agents due to settings change', {
+      count: runningProjectIds.length,
+      projectIds: runningProjectIds,
+    });
+
+    // Stop and restart each agent, preserving its session
+    for (const projectId of runningProjectIds) {
+      const agent = this.agents.get(projectId);
+
+      if (!agent) {
+        continue;
+      }
+
+      const sessionId = agent.sessionId;
+      const mode = agent.mode;
+
+      // Stop the agent
+      await this.stopAgent(projectId);
+
+      // Restart with the same session ID
+      try {
+        if (mode === 'interactive') {
+          await this.startInteractiveAgent(projectId, { sessionId: sessionId || undefined });
+        }
+        // Autonomous agents don't need to be restarted as they run from roadmap
+      } catch (error) {
+        this.logger.error('Failed to restart agent', {
+          projectId,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
   }
 
   on<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void {

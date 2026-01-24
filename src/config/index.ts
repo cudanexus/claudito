@@ -13,13 +13,15 @@ export interface ConfigLoader {
 
 export class EnvironmentConfigLoader implements ConfigLoader {
   load(): AppConfig {
+    const env = this.parseEnv();
+
     return {
       port: this.parsePort(),
-      host: process.env['HOST'] || 'localhost',
-      env: this.parseEnv(),
+      host: process.env['HOST'] || '0.0.0.0',
+      env,
       logLevel: this.parseLogLevel(),
       maxConcurrentAgents: this.parseMaxConcurrentAgents(),
-      devMode: process.env['DEV_MODE'] === 'true' || process.env['CLAUDITO_DEV_MODE'] === '1',
+      devMode: process.env['DEV_MODE'] === 'true' || process.env['CLAUDITO_DEV_MODE'] === '1' || env === 'development',
     };
   }
 

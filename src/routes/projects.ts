@@ -46,6 +46,8 @@ interface NextItemBody {
 interface AgentMessageBody {
   message?: string;
   images?: ImageData[];
+  sessionId?: string;
+  permissionMode?: 'default' | 'acceptEdits' | 'plan';
 }
 
 interface RenameConversationBody {
@@ -505,7 +507,8 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     const mode = agentManager.getAgentMode(id);
     const queuedMessageCount = agentManager.getQueuedMessageCount(id);
     const isWaitingForInput = agentManager.isWaitingForInput(id);
-    res.json({ status, queued: isQueued, mode, queuedMessageCount, isWaitingForInput });
+    const sessionId = agentManager.getSessionId(id);
+    res.json({ status, queued: isQueued, mode, queuedMessageCount, isWaitingForInput, sessionId });
   }));
 
   // Get context usage for running agent or last saved usage
@@ -574,11 +577,38 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     res.json({ success: true });
   }));
 
+  // Remove a queued message from a running agent
+  router.delete('/:id/agent/queue/:index', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params['id'] as string;
+    const index = parseInt(req.params['index'] as string, 10);
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    if (isNaN(index) || index < 0) {
+      throw new ValidationError('Invalid queue index');
+    }
+
+    if (!agentManager.isRunning(id)) {
+      throw new ValidationError('Agent is not running');
+    }
+
+    const success = agentManager.removeQueuedMessage(id, index);
+
+    if (!success) {
+      throw new ValidationError('Failed to remove message from queue');
+    }
+
+    res.json({ success: true });
+  }));
+
   // Start interactive agent session
   router.post('/:id/agent/interactive', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
     const body = req.body as AgentMessageBody;
-    const { message, images } = body;
+    const { message, images, sessionId, permissionMode } = body;
     const project = await projectRepository.findById(id);
 
     if (!project) {
@@ -589,7 +619,12 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       throw new ConflictError('Agent is already running');
     }
 
-    await agentManager.startInteractiveAgent(id, message, images);
+    await agentManager.startInteractiveAgent(id, {
+      initialMessage: message,
+      images,
+      sessionId,
+      permissionMode,
+    });
     res.json({ success: true, status: 'running', mode: 'interactive' });
   }));
 

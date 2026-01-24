@@ -18,16 +18,19 @@ describe('EnvironmentConfigLoader', () => {
       delete process.env['NODE_ENV'];
       delete process.env['LOG_LEVEL'];
       delete process.env['MAX_CONCURRENT_AGENTS'];
+      delete process.env['DEV_MODE'];
+      delete process.env['CLAUDITO_DEV_MODE'];
 
       const loader = new EnvironmentConfigLoader();
       const config = loader.load();
 
       expect(config).toEqual({
         port: 3000,
-        host: 'localhost',
+        host: '0.0.0.0',
         env: 'development',
         logLevel: 'info',
         maxConcurrentAgents: 3,
+        devMode: true, // true because env defaults to 'development'
       });
     });
 

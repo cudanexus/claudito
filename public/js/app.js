@@ -31,6 +31,7 @@
     agentStarting: false, // Prevents concurrent agent starts
     messageSending: false, // Prevents concurrent message sends
     agentMode: 'interactive', // 'interactive' or 'autonomous'
+    permissionMode: 'default', // 'default', 'plan', or 'acceptEdits'
     currentAgentMode: null, // mode of currently running agent
     currentConversationId: null,
     currentConversationStats: null, // { messageCount, toolCallCount, userMessageCount, durationMs, startedAt }
@@ -46,6 +47,15 @@
     activeTab: 'agent-output', // 'agent-output' or 'project-files'
     contextMenuTarget: null, // { path, isDir, name } for context menu actions
     pendingImages: [], // Array of { id, dataUrl, mimeType, size } for images to send with message
+    currentSessionId: null, // Claude session ID for session resumption
+    // WebSocket reconnection state
+    wsReconnect: {
+      attempts: 0,
+      maxAttempts: 50,
+      baseDelay: 1000,
+      maxDelay: 30000,
+      timeout: null
+    },
     // File browser state
     fileBrowser: {
       expandedDirs: {},
@@ -62,6 +72,33 @@
     },
     devMode: false
   };
+
+  // Local storage keys for browser-specific settings
+  var LOCAL_STORAGE_KEYS = {
+    FONT_SIZE: 'claudito-font-size',
+    ACTIVE_TAB: 'claudito-active-tab',
+    SELECTED_PROJECT: 'claudito-selected-project',
+    SCROLL_LOCK: 'claudito-scroll-lock'
+  };
+
+  // Local storage utility functions
+  function saveToLocalStorage(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      console.warn('Failed to save to localStorage:', e);
+    }
+  }
+
+  function loadFromLocalStorage(key, defaultValue) {
+    try {
+      var stored = localStorage.getItem(key);
+      return stored !== null ? JSON.parse(stored) : defaultValue;
+    } catch (e) {
+      console.warn('Failed to load from localStorage:', e);
+      return defaultValue;
+    }
+  }
 
   // API functions
   const api = {
@@ -120,6 +157,9 @@
     getQueuedMessages: function(id) {
       return $.get('/api/projects/' + id + '/agent/queue');
     },
+    removeQueuedMessage: function(id, index) {
+      return $.ajax({ url: '/api/projects/' + id + '/agent/queue/' + index, method: 'DELETE' });
+    },
     getSettings: function() {
       return $.get('/api/settings');
     },
@@ -161,7 +201,7 @@
         data: JSON.stringify({ phaseId: phaseId })
       });
     },
-    startInteractiveAgent: function(id, message, images) {
+    startInteractiveAgent: function(id, message, images, sessionId, permissionMode) {
       var payload = { message: message || '' };
 
       if (images && images.length > 0) {
@@ -171,6 +211,14 @@
             data: img.dataUrl.split(',')[1] // Remove data:image/xxx;base64, prefix
           };
         });
+      }
+
+      if (sessionId) {
+        payload.sessionId = sessionId;
+      }
+
+      if (permissionMode && permissionMode !== 'default') {
+        payload.permissionMode = permissionMode;
       }
 
       return $.ajax({
@@ -310,6 +358,19 @@
     showToast(message, 'error');
   }
 
+  function showSlashCommandWarning(command) {
+    var warningMessage = {
+      type: 'system',
+      content: 'The ' + command + ' command is not available through the API. Some commands are supported directly via buttons in the interface (e.g., Context Usage, Clear).',
+      timestamp: new Date().toISOString()
+    };
+
+    if (state.selectedProjectId) {
+      appendMessage(state.selectedProjectId, warningMessage);
+      scrollConversationToBottom();
+    }
+  }
+
   function escapeHtml(text) {
     var div = document.createElement('div');
     div.textContent = text;
@@ -403,6 +464,9 @@
 
   function closeAllModals() {
     $('.modal').addClass('hidden');
+
+    // Reset Claude files modal mobile view
+    hideMobileClaudeFileEditor();
 
     // Clean up debug modal if it was open
     if (state.debugPanelOpen) {
@@ -531,6 +595,9 @@
     updateClaudeFilePreview();
 
     renderClaudeFilesList();
+
+    // Show editor in mobile view
+    showMobileClaudeFileEditor();
   }
 
   function toggleClaudeFilePreview() {
@@ -795,6 +862,12 @@
 
     if (state.projects.length === 0) {
       $list.html('<div class="text-gray-500 text-sm text-center p-4">No projects yet</div>');
+
+      // Also update overview if visible
+      if (!state.selectedProjectId) {
+        renderProjectOverview();
+      }
+
       return;
     }
 
@@ -805,6 +878,11 @@
 
     updateSelectedProject();
     updateRunningCount();
+
+    // Also update overview if visible (no project selected)
+    if (!state.selectedProjectId) {
+      renderProjectOverview();
+    }
   }
 
   function updateSelectedProject() {
@@ -849,6 +927,7 @@
       $('#project-detail').addClass('hidden');
       $('#empty-state').removeClass('hidden');
       $('#conversation-header').addClass('hidden');
+      renderProjectOverview();
       return;
     }
 
@@ -859,6 +938,134 @@
 
     updateProjectStatus(project);
     renderConversation(project.id);
+  }
+
+  function renderProjectOverview() {
+    var $overview = $('#project-overview');
+
+    if (state.projects.length === 0) {
+      $overview.html(
+        '<div class="flex flex-col items-center justify-center h-full text-center">' +
+          '<svg class="w-16 h-16 text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>' +
+          '</svg>' +
+          '<h2 class="text-xl font-semibold text-gray-400 mb-2">No Projects Yet</h2>' +
+          '<p class="text-sm text-gray-500 mb-4">Create your first project to get started</p>' +
+          '<button id="btn-add-project-overview" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm">' +
+            'Add Project' +
+          '</button>' +
+        '</div>'
+      );
+
+      $('#btn-add-project-overview').on('click', function() {
+        $('#modal-add-project').removeClass('hidden');
+      });
+      return;
+    }
+
+    var html = '<div class="mb-6">' +
+      '<h2 class="text-xl font-semibold text-white mb-1">Projects</h2>' +
+      '<p class="text-sm text-gray-400">Select a project to start working</p>' +
+    '</div>';
+
+    html += '<div class="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">';
+
+    var sortedProjects = sortProjects(state.projects);
+    sortedProjects.forEach(function(project) {
+      html += renderProjectOverviewCard(project);
+    });
+
+    html += '</div>';
+
+    $overview.html(html);
+
+    // Attach click handlers for overview cards
+    $overview.find('.project-overview-card').on('click', function(e) {
+      if ($(e.target).closest('.overview-action').length) return;
+      var projectId = $(this).data('id');
+      selectProject(projectId);
+    });
+
+    $overview.find('.overview-action[data-action="delete"]').on('click', function(e) {
+      e.stopPropagation();
+      var projectId = $(this).data('id');
+      state.pendingDeleteId = projectId;
+      var project = findProjectById(projectId);
+      $('#delete-project-name').text(project ? project.name : 'Unknown');
+      $('#modal-delete-project').removeClass('hidden');
+    });
+
+    $overview.find('.overview-action[data-action="start"]').on('click', function(e) {
+      e.stopPropagation();
+      var projectId = $(this).data('id');
+      selectProject(projectId);
+    });
+  }
+
+  function renderProjectOverviewCard(project) {
+    var statusClass = project.status || 'stopped';
+    var statusText = capitalizeFirst(statusClass);
+    var isWaiting = project.isWaitingForInput || false;
+    var waitingClass = isWaiting ? ' waiting-for-input' : '';
+
+    var contextInfo = '';
+
+    if (project.contextUsage) {
+      var percent = project.contextUsage.percentUsed || 0;
+      contextInfo = '<div class="mt-2 text-xs text-gray-500">' +
+        '<span class="inline-flex items-center gap-1">' +
+          '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>' +
+          '</svg>' +
+          'Context: ' + percent.toFixed(0) + '%' +
+        '</span>' +
+      '</div>';
+    }
+
+    var waitingIndicator = isWaiting ?
+      '<span class="ml-2 text-yellow-400 text-xs">(waiting for input)</span>' : '';
+
+    var runningIndicator = (statusClass === 'running' && !isWaiting) ?
+      '<span class="running-indicator ml-2"></span>' : '';
+
+    var actionButton = '';
+
+    if (statusClass === 'stopped') {
+      actionButton = '<button class="overview-action text-gray-400 hover:text-green-400 p-1" data-action="start" data-id="' + project.id + '" title="Open Project">' +
+        '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
+        '</svg>' +
+      '</button>';
+    }
+
+    var deleteButton = '<button class="overview-action text-gray-400 hover:text-red-400 p-1" data-action="delete" data-id="' + project.id + '" title="Delete Project">' +
+      '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>' +
+      '</svg>' +
+    '</button>';
+
+    return '<div class="project-overview-card bg-gray-800 rounded-lg p-4 cursor-pointer hover:bg-gray-750 transition-colors border border-gray-700 hover:border-gray-600' + waitingClass + '" data-id="' + project.id + '">' +
+      '<div class="flex justify-between items-start mb-2">' +
+        '<h3 class="font-semibold text-white truncate flex-1">' + escapeHtml(project.name) + '</h3>' +
+        '<div class="flex items-center gap-1 ml-2">' +
+          actionButton +
+          deleteButton +
+        '</div>' +
+      '</div>' +
+      '<div class="text-xs text-gray-400 truncate mb-3" title="' + escapeHtml(project.path) + '">' +
+        '<svg class="w-3 h-3 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>' +
+        '</svg>' +
+        escapeHtml(project.path) +
+      '</div>' +
+      '<div class="flex items-center">' +
+        '<span class="status-badge ' + statusClass + '">' + statusText + '</span>' +
+        waitingIndicator +
+        runningIndicator +
+      '</div>' +
+      contextInfo +
+    '</div>';
   }
 
   function updateProjectStatus(project) {
@@ -947,9 +1154,10 @@
         userHtml += '</div>';
       }
 
-      // Add text content if present
+      // Add text content if present (render with markdown)
       if (msg.content) {
-        userHtml += '<pre class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</pre>';
+        var userRenderedContent = renderMarkdown(msg.content);
+        userHtml += '<div class="message-content markdown-content">' + userRenderedContent + '</div>';
       }
 
       userHtml += '</div>';
@@ -1910,7 +2118,8 @@
 
   // Check if a message is a debug/system message that should only show in debug mode
   function isDebugMessage(message) {
-    return message.type === 'system';
+    // Only messages explicitly marked as debug should be hidden
+    return message.isDebug === true;
   }
 
   function appendMessage(projectId, message) {
@@ -2829,6 +3038,32 @@
   }
 
   function setupModalHandlers() {
+    // WebSocket reconnect on failed status
+    $('#ws-connection-status').on('click', function() {
+      if ($(this).hasClass('ws-failed')) {
+        manualReconnect();
+      }
+    });
+
+    // Mobile menu toggle
+    $('#btn-mobile-menu').on('click', function() {
+      $('#sidebar').addClass('open');
+      $('#mobile-menu-overlay').addClass('active');
+    });
+
+    $('#mobile-menu-overlay').on('click', function() {
+      $('#sidebar').removeClass('open');
+      $('#mobile-menu-overlay').removeClass('active');
+    });
+
+    // Close mobile menu when a project is selected
+    $(document).on('click', '.project-card', function() {
+      if ($(window).width() <= 768) {
+        $('#sidebar').removeClass('open');
+        $('#mobile-menu-overlay').removeClass('active');
+      }
+    });
+
     $('#btn-add-project').on('click', function() {
       openModal('modal-add-project');
     });
@@ -3044,6 +3279,7 @@
     // Scroll lock toggle for agent output
     $('#btn-toggle-scroll-lock').on('click', function() {
       state.agentOutputScrollLock = !state.agentOutputScrollLock;
+      saveToLocalStorage(LOCAL_STORAGE_KEYS.SCROLL_LOCK, state.agentOutputScrollLock);
       updateScrollLockButton();
     });
 
@@ -3079,6 +3315,7 @@
         $('#input-allow-rules').val((perms.allowRules || []).join('\n'));
         $('#input-deny-rules').val((perms.denyRules || []).join('\n'));
         $('#input-agent-prompt').val(settings.agentPromptTemplate || '');
+        $('#input-append-system-prompt').val(settings.appendSystemPrompt || '');
         $('#input-send-ctrl-enter').prop('checked', settings.sendWithCtrlEnter !== false);
         $('#input-history-limit').val(settings.historyLimit || 25);
         $('#input-desktop-notifications').prop('checked', settings.enableDesktopNotifications || false);
@@ -3182,6 +3419,7 @@
     var newSendWithCtrlEnter = $('#input-send-ctrl-enter').is(':checked');
     var historyLimit = parseInt($('#input-history-limit').val(), 10) || 25;
     var enableDesktopNotifications = $('#input-desktop-notifications').is(':checked');
+    var appendSystemPrompt = $('#input-append-system-prompt').val() || '';
     var settings = {
       maxConcurrentAgents: parseInt($('#input-max-concurrent').val(), 10),
       claudePermissions: {
@@ -3191,6 +3429,7 @@
         denyRules: parseRulesFromTextarea($('#input-deny-rules').val())
       },
       agentPromptTemplate: $('#input-agent-prompt').val(),
+      appendSystemPrompt: appendSystemPrompt,
       sendWithCtrlEnter: newSendWithCtrlEnter,
       historyLimit: historyLimit,
       enableDesktopNotifications: enableDesktopNotifications
@@ -3355,6 +3594,7 @@
 
         if (state.selectedProjectId === projectId) {
           state.selectedProjectId = null;
+          saveToLocalStorage(LOCAL_STORAGE_KEYS.SELECTED_PROJECT, null);
           renderProjectDetail(null);
         }
 
@@ -3440,20 +3680,23 @@
     $('#font-size-display').text(size);
 
     // Persist to localStorage
-    localStorage.setItem('claudito-font-size', state.fontSize);
+    saveToLocalStorage(LOCAL_STORAGE_KEYS.FONT_SIZE, state.fontSize);
   }
 
   function loadFontSize() {
-    var savedSize = localStorage.getItem('claudito-font-size');
+    var savedSize = loadFromLocalStorage(LOCAL_STORAGE_KEYS.FONT_SIZE, 14);
+    state.fontSize = savedSize;
 
-    if (savedSize) {
-      state.fontSize = parseInt(savedSize, 10);
-
-      if (state.fontSize < 10) state.fontSize = 10;
-      if (state.fontSize > 24) state.fontSize = 24;
-    }
+    if (state.fontSize < 10) state.fontSize = 10;
+    if (state.fontSize > 24) state.fontSize = 24;
 
     updateFontSize();
+  }
+
+  function loadScrollLockPreference() {
+    var savedScrollLock = loadFromLocalStorage(LOCAL_STORAGE_KEYS.SCROLL_LOCK, false);
+    state.agentOutputScrollLock = savedScrollLock;
+    updateScrollLockButton();
   }
 
   function setupAgentHandlers() {
@@ -3472,6 +3715,19 @@
 
     $('#btn-mode-autonomous').on('click', function() {
       showToast('Autonomous mode is currently in development', 'info');
+    });
+
+    // Permission mode toggle handlers
+    $('#btn-perm-default').on('click', function() {
+      setPermissionMode('default');
+    });
+
+    $('#btn-perm-plan').on('click', function() {
+      setPermissionMode('plan');
+    });
+
+    $('#btn-perm-accept').on('click', function() {
+      setPermissionMode('acceptEdits');
     });
 
     // Message form handler
@@ -3520,6 +3776,17 @@
     // Queued messages indicator (dynamically created, so use delegation)
     $(document).on('click', '#queued-messages-indicator', function() {
       openQueuedMessagesModal();
+    });
+
+    // Remove queued message button (dynamically created, so use delegation)
+    $(document).on('click', '.btn-remove-queued-message', function(e) {
+      e.stopPropagation();
+      var $item = $(this).closest('[data-queue-index]');
+      var index = parseInt($item.data('queue-index'), 10);
+
+      if (!isNaN(index)) {
+        removeQueuedMessage(index);
+      }
     });
 
     // Save Claude file button
@@ -3672,6 +3939,10 @@
   function startNewConversation() {
     if (!state.selectedProjectId) return;
 
+    var projectId = state.selectedProjectId;
+    var project = findProjectById(projectId);
+    var wasRunning = project && project.status === 'running';
+
     // Clear read file cache when starting new conversation
     clearReadFileCache();
 
@@ -3679,20 +3950,39 @@
     state.currentTodos = [];
     updateTasksButtonBadge();
 
-    // Clear current conversation on server
-    $.ajax({
-      url: '/api/projects/' + state.selectedProjectId + '/conversation/clear',
-      method: 'POST'
-    }).always(function() {
-      // Clear local state regardless of server response
-      state.currentConversationId = null;
-      state.currentConversationStats = null;
-      state.currentConversationMetadata = null;
-      state.conversations[state.selectedProjectId] = [];
-      renderConversation(state.selectedProjectId);
-      updateConversationStats();
-      showToast('New conversation started', 'info');
-    });
+    // Clear session ID to force new session
+    state.currentSessionId = null;
+
+    function clearAndRestart() {
+      // Clear current conversation on server
+      $.ajax({
+        url: '/api/projects/' + projectId + '/conversation/clear',
+        method: 'POST'
+      }).always(function() {
+        // Clear local state regardless of server response
+        state.currentConversationId = null;
+        state.currentConversationStats = null;
+        state.currentConversationMetadata = null;
+        state.conversations[projectId] = [];
+        renderConversation(projectId);
+        updateConversationStats();
+        showToast('Context cleared', 'info');
+      });
+    }
+
+    // If agent is running, stop it first then clear
+    if (wasRunning) {
+      showContentLoading('Clearing context...');
+      api.stopAgent(projectId)
+        .always(function() {
+          updateProjectStatusById(projectId, 'stopped');
+          stopAgentStatusPolling();
+          clearAndRestart();
+          hideContentLoading();
+        });
+    } else {
+      clearAndRestart();
+    }
   }
 
   function showRenameConversationModal(conversationId, currentLabel) {
@@ -3964,6 +4254,77 @@
     }
   }
 
+  function setPermissionMode(mode) {
+    var project = findProjectById(state.selectedProjectId);
+    var isRunning = project && project.status === 'running';
+    var previousMode = state.permissionMode;
+    state.permissionMode = mode;
+    updatePermissionModeButtons();
+
+    // If agent is running and mode changed, restart with the same session
+    if (isRunning && previousMode !== mode && state.currentSessionId) {
+      restartAgentWithNewPermissionMode();
+    }
+  }
+
+  function restartAgentWithNewPermissionMode() {
+    var projectId = state.selectedProjectId;
+
+    if (!projectId) return;
+
+    var sessionId = state.currentSessionId;
+    showToast('Restarting agent with ' + getPermissionModeLabel(state.permissionMode) + ' mode...', 'info');
+
+    // Stop the current agent
+    api.stopAgent(projectId)
+      .done(function() {
+        updateProjectStatusById(projectId, 'stopped');
+
+        // Start the agent again with the same session ID and new permission mode
+        api.startInteractiveAgent(projectId, '', [], sessionId, state.permissionMode)
+          .done(function() {
+            state.currentAgentMode = 'interactive';
+            updateProjectStatusById(projectId, 'running');
+            startAgentStatusPolling(projectId);
+            appendMessage(projectId, {
+              type: 'system',
+              content: 'Agent restarted with ' + getPermissionModeLabel(state.permissionMode) + ' mode',
+              timestamp: new Date().toISOString()
+            });
+          })
+          .fail(function(xhr) {
+            showErrorToast(xhr, 'Failed to restart agent');
+          });
+      })
+      .fail(function(xhr) {
+        showErrorToast(xhr, 'Failed to stop agent');
+      });
+  }
+
+  function getPermissionModeLabel(mode) {
+    switch (mode) {
+      case 'plan': return 'Plan';
+      case 'acceptEdits': return 'Accept Edits';
+      default: return 'Default';
+    }
+  }
+
+  function updatePermissionModeButtons() {
+    $('.perm-btn').removeClass('perm-active');
+
+    switch (state.permissionMode) {
+      case 'plan':
+        $('#btn-perm-plan').addClass('perm-active');
+        break;
+      case 'acceptEdits':
+        $('#btn-perm-accept').addClass('perm-active');
+        break;
+      default:
+        $('#btn-perm-default').addClass('perm-active');
+        break;
+    }
+  }
+
   function updateStartStopButtons() {
     var project = findProjectById(state.selectedProjectId);
     var isRunning = project && project.status === 'running';
@@ -4014,14 +4375,44 @@
     }
   }
 
-  function sendMessage() {
-    if (state.messageSending || state.agentStarting) return;
+  // Claude Code slash commands that don't work through the API
+  var UNSUPPORTED_SLASH_COMMANDS = [
+    '/context-usage', '/context', '/compact', '/clear', '/config', '/cost',
+    '/doctor', '/help', '/init', '/login', '/logout', '/memory', '/model',
+    '/permissions', '/pr-comments', '/review', '/status', '/terminal-setup',
+    '/vim', '/bug', '/listen', '/user:*', '/project:*', '/add-dir', '/mcp',
+    '/plan', '/release-notes', '/allowed-tools', '/install-github-app', '/ide'
+  ];
 
+  function isUnsupportedSlashCommand(message) {
+    if (!message.startsWith('/')) return false;
+
+    var cmd = message.split(/\s/)[0].toLowerCase();
+
+    return UNSUPPORTED_SLASH_COMMANDS.some(function(pattern) {
+      if (pattern.endsWith(':*')) {
+        return cmd.startsWith(pattern.slice(0, -1));
+      }
+
+      return cmd === pattern;
+    });
+  }
+
+  function sendMessage() {
     var $input = $('#input-message');
     var message = $input.val().trim();
     var hasImages = state.pendingImages.length > 0;
 
     if (!message && !hasImages) return;
+
+    // Check for unsupported Claude Code slash commands
+    if (isUnsupportedSlashCommand(message)) {
+      showSlashCommandWarning(message.split(/\s/)[0]);
+      return;
+    }
+
+    // All messages (including slash commands) are sent to Claude agent
+    if (state.messageSending || state.agentStarting) return;
 
     if (!state.selectedProjectId) return;
 
@@ -4038,6 +4429,10 @@
     if (project.status !== 'running') return;
 
     doSendMessage(message);
+  }
+
+  function formatNumber(num) {
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
   function doSendMessage(message) {
@@ -4102,7 +4497,7 @@
     $('#btn-send-message').prop('disabled', true);
     showContentLoading('Starting agent...');
 
-    api.startInteractiveAgent(projectId, message, images)
+    api.startInteractiveAgent(projectId, message, images, null, state.permissionMode)
       .done(function() {
         state.currentAgentMode = 'interactive';
         updateProjectStatusById(projectId, 'running');
@@ -4443,11 +4838,21 @@
     state.currentAgentMode = null; // Reset on project change
     var project = findProjectById(projectId);
 
+    // Save selected project to localStorage
+    saveToLocalStorage(LOCAL_STORAGE_KEYS.SELECTED_PROJECT, projectId);
+
     subscribeToProject(projectId);
     loadConversationHistory(projectId);
     updateSelectedProject();
     renderProjectDetail(project);
     loadAgentStatus(projectId);
+
+    // Restore saved tab preference
+    var savedTab = loadFromLocalStorage(LOCAL_STORAGE_KEYS.ACTIVE_TAB, 'agent-output');
+
+    if (savedTab && savedTab !== state.activeTab) {
+      switchTab(savedTab);
+    }
 
     // Refresh debug panel if open
     if (state.debugPanelOpen) {
@@ -4458,6 +4863,11 @@
   function loadAgentStatus(projectId) {
     api.getAgentStatus(projectId)
       .done(function(data) {
+        // Capture session ID if present
+        if (data.sessionId) {
+          state.currentSessionId = data.sessionId;
+        }
+
         if (data.status === 'running' && data.mode) {
           state.currentAgentMode = data.mode;
           state.queuedMessageCount = data.queuedMessageCount || 0;
@@ -4640,7 +5050,7 @@
     var startPromise;
 
     if (mode === 'interactive') {
-      startPromise = api.startInteractiveAgent(projectId);
+      startPromise = api.startInteractiveAgent(projectId, null, null, null, state.permissionMode);
     } else {
       startPromise = api.startAgent(projectId);
     }
@@ -4726,6 +5136,11 @@
         var project = findProjectById(projectId);
         var actualStatus = response.status || 'stopped';
 
+        // Capture session ID if present
+        if (response.sessionId) {
+          state.currentSessionId = response.sessionId;
+        }
+
         // Update queued message count
         var oldQueuedCount = state.queuedMessageCount;
         state.queuedMessageCount = response.queuedMessageCount || 0;
@@ -4790,10 +5205,17 @@
 
           for (var i = 0; i < messages.length; i++) {
             var msg = messages[i];
-            html += '<div class="bg-gray-900 rounded p-3">' +
-              '<div class="flex items-center gap-2 mb-2">' +
-                '<span class="text-xs font-medium text-yellow-400">#' + (i + 1) + '</span>' +
-                '<span class="text-xs text-gray-500">Waiting to be sent</span>' +
+            html += '<div class="bg-gray-900 rounded p-3" data-queue-index="' + i + '">' +
+              '<div class="flex items-center justify-between mb-2">' +
+                '<div class="flex items-center gap-2">' +
+                  '<span class="text-xs font-medium text-yellow-400">#' + (i + 1) + '</span>' +
+                  '<span class="text-xs text-gray-500">Waiting to be sent</span>' +
+                '</div>' +
+                '<button class="btn-remove-queued-message text-gray-500 hover:text-red-400 p-1 rounded hover:bg-gray-800 transition-colors" title="Remove from queue">' +
+                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>' +
+                  '</svg>' +
+                '</button>' +
               '</div>' +
               '<div class="text-sm text-gray-200 whitespace-pre-wrap break-words">' + escapeHtml(msg) + '</div>' +
             '</div>';
@@ -4807,6 +5229,25 @@
       })
       .fail(function(xhr) {
         showErrorToast(xhr, 'Failed to load queued messages');
+      });
+  }
+
+  function removeQueuedMessage(index) {
+    if (!state.selectedProjectId) {
+      return;
+    }
+
+    api.removeQueuedMessage(state.selectedProjectId, index)
+      .done(function() {
+        showToast('Message removed from queue', 'success');
+        state.queuedMessageCount = Math.max(0, state.queuedMessageCount - 1);
+        updateQueuedMessagesDisplay();
+
+        // Refresh the modal content
+        openQueuedMessagesModal();
+      })
+      .fail(function(xhr) {
+        showErrorToast(xhr, 'Failed to remove message from queue');
       });
   }
 
@@ -4829,35 +5270,126 @@
       .done(function(projects) {
         state.projects = projects || [];
         renderProjectList();
+
+        // Restore saved project selection
+        var savedProjectId = loadFromLocalStorage(LOCAL_STORAGE_KEYS.SELECTED_PROJECT, null);
+
+        if (savedProjectId && findProjectById(savedProjectId)) {
+          selectProject(savedProjectId);
+        }
       })
       .fail(function(xhr) {
         showErrorToast(xhr, 'Failed to load projects');
       });
   }
 
-  // WebSocket connection
+  // WebSocket connection with exponential backoff
   function connectWebSocket() {
+    // Clear any pending reconnect timeout
+    if (state.wsReconnect.timeout) {
+      clearTimeout(state.wsReconnect.timeout);
+      state.wsReconnect.timeout = null;
+    }
+
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var wsUrl = protocol + '//' + window.location.host;
 
-    state.websocket = new WebSocket(wsUrl);
+    try {
+      state.websocket = new WebSocket(wsUrl);
+    } catch (err) {
+      console.error('WebSocket creation failed:', err);
+      scheduleReconnect();
+      return;
+    }
 
     state.websocket.onopen = function() {
       console.log('WebSocket connected');
+      state.wsReconnect.attempts = 0;
+      updateConnectionStatus('connected');
+
+      // Re-subscribe to current project if any
+      if (state.selectedProjectId) {
+        subscribeToProject(state.selectedProjectId);
+      }
     };
 
     state.websocket.onmessage = function(event) {
       handleWebSocketMessage(JSON.parse(event.data));
     };
 
-    state.websocket.onclose = function() {
-      console.log('WebSocket disconnected, reconnecting...');
-      setTimeout(connectWebSocket, 3000);
+    state.websocket.onclose = function(event) {
+      console.log('WebSocket disconnected (code: ' + event.code + ')');
+      updateConnectionStatus('disconnected');
+      scheduleReconnect();
     };
 
     state.websocket.onerror = function(error) {
       console.error('WebSocket error:', error);
+      updateConnectionStatus('error');
     };
+  }
+
+  function scheduleReconnect() {
+    if (state.wsReconnect.attempts >= state.wsReconnect.maxAttempts) {
+      console.error('Max WebSocket reconnection attempts reached');
+      updateConnectionStatus('failed');
+      return;
+    }
+
+    state.wsReconnect.attempts++;
+    var delay = calculateBackoffDelay();
+    console.log('WebSocket reconnecting in ' + delay + 'ms (attempt ' + state.wsReconnect.attempts + ')');
+    updateConnectionStatus('reconnecting', delay);
+
+    state.wsReconnect.timeout = setTimeout(connectWebSocket, delay);
+  }
+
+  function calculateBackoffDelay() {
+    // Exponential backoff with jitter
+    var exponentialDelay = state.wsReconnect.baseDelay * Math.pow(2, state.wsReconnect.attempts - 1);
+    var cappedDelay = Math.min(exponentialDelay, state.wsReconnect.maxDelay);
+    // Add random jitter (0-25% of delay)
+    var jitter = Math.random() * 0.25 * cappedDelay;
+    return Math.floor(cappedDelay + jitter);
+  }
+
+  function updateConnectionStatus(status, nextRetryMs) {
+    var $indicator = $('#ws-connection-status');
+    if ($indicator.length === 0) return;
+
+    $indicator.removeClass('ws-connected ws-disconnected ws-reconnecting ws-error ws-failed');
+    $indicator.removeClass('cursor-pointer').addClass('cursor-default');
+
+    switch (status) {
+      case 'connected':
+        $indicator.addClass('ws-connected').attr('title', 'Connected').html(
+          '<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5"/></svg>'
+        );
+        break;
+      case 'disconnected':
+      case 'reconnecting':
+        var retryText = nextRetryMs ? ' (retry in ' + Math.ceil(nextRetryMs / 1000) + 's)' : '';
+        $indicator.addClass('ws-reconnecting').attr('title', 'Reconnecting' + retryText).html(
+          '<svg class="w-3 h-3 animate-pulse" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5"/></svg>'
+        );
+        break;
+      case 'error':
+        $indicator.addClass('ws-error').attr('title', 'Connection error').html(
+          '<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5"/></svg>'
+        );
+        break;
+      case 'failed':
+        $indicator.addClass('ws-failed cursor-pointer').removeClass('cursor-default')
+          .attr('title', 'Connection failed - click to retry').html(
+          '<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"/></svg>'
+        );
+        break;
+    }
+  }
+
+  function manualReconnect() {
+    state.wsReconnect.attempts = 0;
+    connectWebSocket();
   }
 
   function handleWebSocketMessage(message) {
@@ -5054,6 +5586,9 @@
   function switchTab(tabName) {
     state.activeTab = tabName;
 
+    // Save to localStorage
+    saveToLocalStorage(LOCAL_STORAGE_KEYS.ACTIVE_TAB, tabName);
+
     // Update tab button states
     $('.tab-button').removeClass('active').addClass('text-gray-400 border-transparent').removeClass('text-white border-purple-500');
     $('#tab-' + tabName).addClass('active text-white border-purple-500').removeClass('text-gray-400 border-transparent');
@@ -5085,6 +5620,8 @@
     });
 
     $('#tab-project-files').on('click', function() {
+      // Reset mobile file editor view when switching to files tab
+      hideMobileFileEditor();
       switchTab('project-files');
     });
   }
@@ -5237,6 +5774,9 @@
       $('#file-editor-textarea').val(file.content);
       updateFileModifiedState(file);
       updateEditorSyntaxHighlighting(filePath, file.content);
+
+      // Show editor in mobile view
+      showMobileFileEditor();
     }
   }
 
@@ -5562,6 +6102,48 @@
         loadFileTree(project.path);
       }
     });
+
+    // Mobile file editor back button
+    $('#btn-file-editor-back').on('click', function() {
+      hideMobileFileEditor();
+    });
+
+    // Mobile Claude files back button
+    $('#btn-claude-files-back').on('click', function() {
+      hideMobileClaudeFileEditor();
+    });
+  }
+
+  function isMobileView() {
+    return window.innerWidth <= 768;
+  }
+
+  function showMobileFileEditor() {
+    if (!isMobileView()) return;
+
+    $('#file-browser-sidebar').addClass('mobile-hidden');
+    $('#file-editor-area').addClass('mobile-visible');
+    $('#file-editor-mobile-header').removeClass('hidden');
+  }
+
+  function hideMobileFileEditor() {
+    $('#file-browser-sidebar').removeClass('mobile-hidden');
+    $('#file-editor-area').removeClass('mobile-visible');
+    $('#file-editor-mobile-header').addClass('hidden');
+  }
+
+  function showMobileClaudeFileEditor() {
+    if (!isMobileView()) return;
+
+    $('#claude-files-list').addClass('mobile-hidden');
+    $('#claude-file-editor-area').addClass('mobile-visible');
+    $('#btn-claude-files-back').removeClass('hidden');
+  }
+
+  function hideMobileClaudeFileEditor() {
+    $('#claude-files-list').removeClass('mobile-hidden');
+    $('#claude-file-editor-area').removeClass('mobile-visible');
+    $('#btn-claude-files-back').addClass('hidden');
   }
 
   // Load settings on init to get sendWithCtrlEnter preference and notification settings
@@ -5583,6 +6165,7 @@
     loadResourceStatus();
     loadInitialSettings();
     loadFontSize();
+    loadScrollLockPreference();
     loadDevModeStatus();
     connectWebSocket();
   }

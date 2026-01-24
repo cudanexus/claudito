@@ -49,6 +49,7 @@ export interface GlobalSettings {
   sendWithCtrlEnter: boolean;
   historyLimit: number;
   enableDesktopNotifications: boolean;
+  appendSystemPrompt: string;
 }
 
 const DEFAULT_SETTINGS: GlobalSettings = {
@@ -65,6 +66,7 @@ const DEFAULT_SETTINGS: GlobalSettings = {
   sendWithCtrlEnter: true,
   historyLimit: 25,
   enableDesktopNotifications: false,
+  appendSystemPrompt: '',
 };
 
 // Update type that allows partial claudePermissions for incremental updates
@@ -75,6 +77,7 @@ export interface SettingsUpdate {
   sendWithCtrlEnter?: boolean;
   historyLimit?: number;
   enableDesktopNotifications?: boolean;
+  appendSystemPrompt?: string;
 }
 
 export interface SettingsRepository {
@@ -145,6 +148,7 @@ export class FileSettingsRepository implements SettingsRepository {
       sendWithCtrlEnter: parsed.sendWithCtrlEnter ?? DEFAULT_SETTINGS.sendWithCtrlEnter,
       historyLimit: parsed.historyLimit ?? DEFAULT_SETTINGS.historyLimit,
       enableDesktopNotifications: parsed.enableDesktopNotifications ?? DEFAULT_SETTINGS.enableDesktopNotifications,
+      appendSystemPrompt: parsed.appendSystemPrompt ?? DEFAULT_SETTINGS.appendSystemPrompt,
     };
   }
 
@@ -183,6 +187,10 @@ export class FileSettingsRepository implements SettingsRepository {
 
     if (updates.enableDesktopNotifications !== undefined) {
       this.settings.enableDesktopNotifications = updates.enableDesktopNotifications;
+    }
+
+    if (updates.appendSystemPrompt !== undefined) {
+      this.settings.appendSystemPrompt = updates.appendSystemPrompt;
     }
 
     this.saveToFile();

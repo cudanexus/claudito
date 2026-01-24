@@ -348,10 +348,7 @@ Write the ROADMAP.md file to doc/ROADMAP.md now.`;
           break;
 
         case 'system':
-          // System message
-          if (event.subtype === 'init') {
-            this.emitMessage(projectId, 'system', `Session: ${event.session_id ?? 'new'}`);
-          }
+          // System init - session ID captured internally
           break;
 
         case 'user':

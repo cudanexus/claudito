@@ -15,7 +15,8 @@ process.env.CLAUDITO_DEV_MODE = '1';
 const isWindows = process.platform === 'win32';
 const npm = isWindows ? 'npm.cmd' : 'npm';
 
-let lastExitTime = 0;
+let lastCtrlCTime = 0;
+let lastServerExitTime = 0;
 let isExiting = false;
 
 function run() {
@@ -35,12 +36,13 @@ function run() {
 
     const now = Date.now();
 
-    if (now - lastExitTime < 2000) {
-      console.log('\n=== Quick restart detected, exiting loop ===\n');
+    // Only exit on quick successive server exits (not from Ctrl+C)
+    if (now - lastServerExitTime < 2000) {
+      console.log('\n=== Quick restart detected (server crashed?), exiting loop ===\n');
       process.exit(code || 0);
     }
 
-    lastExitTime = now;
+    lastServerExitTime = now;
     console.log(`\n=== Server exited with code ${code}, restarting in 1 second... ===\n`);
     setTimeout(run, 1000);
   });
@@ -54,14 +56,14 @@ function run() {
 process.on('SIGINT', () => {
   const now = Date.now();
 
-  if (now - lastExitTime < 2000) {
+  if (now - lastCtrlCTime < 2000) {
     console.log('\n=== Exiting loop ===\n');
     isExiting = true;
     process.exit(0);
   }
 
-  lastExitTime = now;
-  console.log('\n=== Press Ctrl+C again to exit loop ===\n');
+  lastCtrlCTime = now;
+  console.log('\n=== Press Ctrl+C again within 2 seconds to exit loop ===\n');
 });
 
 console.log('Starting build-and-start loop (Ctrl+C twice to exit)...');

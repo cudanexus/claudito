@@ -83,14 +83,15 @@ conversations/
 - `DELETE /api/projects/:id/roadmap/phase` - Delete a phase (body: {phaseId})
 - `PUT /api/projects/:id/roadmap/next-item` - Set next item to work on
 - `POST /api/projects/:id/agent/start` - Start autonomous loop
-- `POST /api/projects/:id/agent/interactive` - Start interactive agent session
+- `POST /api/projects/:id/agent/interactive` - Start interactive agent session (body: {message?, images?, sessionId?, permissionMode?})
 - `POST /api/projects/:id/agent/send` - Send message to interactive agent
 - `POST /api/projects/:id/agent/stop` - Stop agent
-- `GET /api/projects/:id/agent/status` - Get agent status (includes mode)
+- `GET /api/projects/:id/agent/status` - Get agent status (includes mode, sessionId)
 - `GET /api/projects/:id/agent/context` - Get agent context usage (tokens, percentages)
 - `GET /api/projects/:id/agent/loop` - Get loop status
 - `GET /api/projects/:id/agent/queue` - Get queued messages
-- `DELETE /api/projects/:id/agent/queue` - Remove from queue
+- `DELETE /api/projects/:id/agent/queue` - Remove project from agent startup queue
+- `DELETE /api/projects/:id/agent/queue/:index` - Remove a queued message by index
 - `GET /api/projects/:id/conversation` - Get conversation history
 - `GET /api/projects/:id/conversations` - List all conversations (supports `?limit=N`)
 - `PUT /api/projects/:id/conversations/:conversationId` - Rename conversation (body: {label})
@@ -123,10 +124,11 @@ Agent manager runs autonomous loop that:
 ## Configuration (Environment Variables)
 
 - `PORT` - Server port (default: 3000)
-- `HOST` - Server host (default: localhost)
+- `HOST` - Server host (default: 0.0.0.0)
 - `NODE_ENV` - Environment (development/production/test)
 - `LOG_LEVEL` - Log level (debug/info/warn/error)
 - `MAX_CONCURRENT_AGENTS` - Max concurrent agents (default: 3)
+- `DEV_MODE` - Enable dev mode (default: true in development, false in production)
 
 ## Commands
 
@@ -139,6 +141,20 @@ Agent manager runs autonomous loop that:
 
 - **Interactive Mode** (default): Chat with Claude, send messages, see tool usage in real-time. Agent auto-starts when first message is sent.
 - **Autonomous Mode**: Runs through roadmap milestones automatically. Requires manual start.
+
+## Permission Modes (Runtime Toggle)
+
+Permission mode can be changed at runtime via UI buttons. Changing mode while agent is running restarts it with the same session:
+- **Default**: Ask for each action (shield icon)
+- **Plan**: Review plan before execution (clipboard icon)
+- **Accept Edits**: Auto-approve file edits (pencil icon)
+
+## Session Management
+
+Claude sessions are managed by Claude CLI itself (not persisted locally):
+- Session ID captured from Claude's init event
+- `--session-id` flag used to resume sessions when restarting
+- Changing permission mode restarts agent with same session ID
 
 ## Server Features
 
@@ -157,6 +173,7 @@ Agent manager runs autonomous loop that:
   - Auto-starts agent on first message send
   - Configurable keybindings (Ctrl+Enter or Enter to send)
   - No Start button needed - just type and send
+  - Permission mode toggle (Default/Plan/Accept Edits) - restarts agent with same session
 
 - **File Editor**:
   - Browse project files in tree view
@@ -187,10 +204,17 @@ Agent manager runs autonomous loop that:
   - Browse recent logs with color-coded levels
   - View all tracked processes across projects
 
+- **Mobile Support**:
+  - Responsive sidebar with hamburger menu toggle
+  - Collapsible navigation on small screens
+  - File browser: full-screen file list, then full-screen editor with back button
+  - Claude files modal: full-screen file list, then full-screen editor with back button
+
 ## Settings
 
 - `maxConcurrentAgents` - Maximum concurrent agents (1-10)
 - `agentPromptTemplate` - Template for autonomous agent instructions
+- `appendSystemPrompt` - Custom text appended to Claude's system prompt via `--append-system-prompt` flag. Changing this setting restarts all running agents.
 - `sendWithCtrlEnter` - Input keybinding preference (true=Ctrl+Enter sends, false=Enter sends)
 - `historyLimit` - Maximum conversations in history dropdown (5-100, default: 25)
 

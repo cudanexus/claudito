@@ -77,6 +77,34 @@ body {
   color: #facc15;
 }
 
+/* WebSocket connection status indicator */
+#ws-connection-status {
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+#ws-connection-status.ws-connected {
+  color: #4ade80;
+}
+
+#ws-connection-status.ws-disconnected,
+#ws-connection-status.ws-reconnecting {
+  color: #facc15;
+}
+
+#ws-connection-status.ws-error {
+  color: #fb923c;
+}
+
+#ws-connection-status.ws-failed {
+  color: #f87171;
+}
+
+#ws-connection-status.ws-failed:hover {
+  color: #fca5a5;
+}
+
 /* Mode selector buttons */
 .mode-btn {
   color: #9ca3af;
@@ -98,6 +126,31 @@ body {
 }
 
 #mode-selector.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Permission mode selector buttons */
+.perm-btn {
+  color: #9ca3af;
+  background-color: transparent;
+}
+
+.perm-btn:hover:not(.perm-active) {
+  color: #e5e7eb;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.perm-btn.perm-active {
+  color: #fff;
+  background-color: #7c3aed;
+}
+
+#permission-mode-selector {
+  border: 1px solid #4b5563;
+}
+
+#permission-mode-selector.disabled {
   opacity: 0.5;
   pointer-events: none;
 }
@@ -205,6 +258,28 @@ body {
 .quick-action.delete:hover:not(:disabled) {
   color: #f87171;
   background-color: rgba(239, 68, 68, 0.2);
+}
+
+/* Project overview cards */
+.project-overview-card {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.project-overview-card:hover {
+  background-color: #374151;
+}
+
+.project-overview-card.waiting-for-input {
+  border-color: #eab308;
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.3);
+}
+
+.overview-action {
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.overview-action:hover {
+  transform: scale(1.1);
 }
 
 /* Loading overlay for content area */
@@ -1757,18 +1832,21 @@ body {
 @media (max-width: 768px) {
   #sidebar {
     position: fixed;
+    top: 0;
     left: -100%;
+    bottom: 0;
     z-index: 30;
     transition: left 0.3s ease-in-out;
     width: 80%;
     max-width: 300px;
+    height: 100vh;
   }
 
   #sidebar.open {
     left: 0;
   }
 
-  /* Add mobile menu toggle button */
+  /* Mobile menu toggle button */
   .mobile-menu-overlay {
     position: fixed;
     inset: 0;
@@ -1794,6 +1872,120 @@ body {
 
   .btn-group-responsive > * {
     width: 100%;
+  }
+
+  /* Make project header wrap better on mobile */
+  #project-detail header .flex {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* Hide mode selector labels on very small screens */
+  #mode-selector .mode-btn {
+    padding: 0.5rem;
+  }
+
+  #mode-selector .mode-btn svg + span {
+    display: none;
+  }
+
+  /* Conversation toolbar adjustments */
+  #conversation-toolbar {
+    flex-wrap: wrap;
+  }
+
+  #conversation-toolbar > div {
+    flex-wrap: wrap;
+  }
+
+  /* Mobile file browser - show list first, then content full width */
+  #tab-content-project-files > .flex {
+    flex-direction: column;
+    position: relative;
+  }
+
+  #file-browser-sidebar {
+    width: 100%;
+    flex: 1;
+    border-right: none;
+    border-bottom: 1px solid #374151;
+  }
+
+  #file-browser-sidebar.mobile-hidden {
+    display: none;
+  }
+
+  #file-editor-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    z-index: 10;
+  }
+
+  #file-editor-area.mobile-visible {
+    display: flex;
+  }
+
+  #file-editor-mobile-header {
+    display: flex !important;
+  }
+
+  /* Mobile back button for file editor */
+  .mobile-back-btn {
+    display: flex !important;
+  }
+
+  /* Claude Files Modal - mobile view */
+  #modal-claude-files .modal-content > div {
+    height: 90vh;
+  }
+
+  #modal-claude-files .flex.flex-1.overflow-hidden.min-h-0 {
+    flex-direction: column;
+    position: relative;
+  }
+
+  #claude-files-list {
+    width: 100%;
+    flex: 1;
+    border-right: none;
+    border-bottom: 1px solid #374151;
+  }
+
+  #claude-files-list.mobile-hidden {
+    display: none;
+  }
+
+  #claude-file-editor-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    z-index: 10;
+    background: #1f2937;
+  }
+
+  #claude-file-editor-area.mobile-visible {
+    display: flex;
+  }
+
+  /* Mobile back button for claude files */
+  .claude-files-back-btn {
+    display: flex !important;
+  }
+}
+
+/* Desktop - hide mobile elements */
+@media (min-width: 769px) {
+  .mobile-back-btn,
+  .claude-files-back-btn,
+  #file-editor-mobile-header {
+    display: none !important;
   }
 }
 

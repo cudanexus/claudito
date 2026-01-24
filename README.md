@@ -152,6 +152,7 @@ Chat with Claude in real-time. The agent auto-starts when you send your first me
 - See tool usage as it happens (file reads, edits, bash commands)
 - Code diffs with syntax highlighting
 - Send follow-up messages naturally
+- Toggle permission mode (Default/Plan/Accept Edits) at runtime
 
 #### Autonomous Mode
 Runs through ROADMAP.md milestones automatically.
@@ -180,6 +181,8 @@ Runs through ROADMAP.md milestones automatically.
 | **Context Monitor** | View token usage and context window utilization |
 | **Font Controls** | Adjust text size with +/- buttons |
 | **Keyboard Shortcuts** | Configurable keybindings (Ctrl+Enter or Enter to send) |
+| **Mobile Support** | Responsive design with collapsible sidebar, full-screen file browsing with back navigation |
+| **Permission Mode Toggle** | Switch between Default, Plan, and Accept Edits modes at runtime |
 
 ### Real-time Features
 

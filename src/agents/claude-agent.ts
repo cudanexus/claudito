@@ -75,9 +75,11 @@ export interface ClaudeAgent {
   readonly queuedMessageCount: number;
   readonly queuedMessages: string[];
   readonly isWaitingForInput: boolean;
+  readonly sessionId: string | null;
   start(instructions: string): void;
   stop(): Promise<void>;
   sendInput(input: string): void;
+  removeQueuedMessage(index: number): boolean;
   on<K extends keyof AgentEvents>(event: K, listener: AgentEvents[K]): void;
   off<K extends keyof AgentEvents>(event: K, listener: AgentEvents[K]): void;
 }
@@ -135,6 +137,7 @@ export interface PermissionConfig {
   allowedTools?: string[];
   disallowedTools?: string[];
   permissionMode?: 'default' | 'acceptEdits' | 'plan';
+  appendSystemPrompt?: string;
 }
 
 export interface ClaudeAgentConfig {
@@ -145,6 +148,8 @@ export interface ClaudeAgentConfig {
   skipPermissions?: boolean;
   permissions?: PermissionConfig;
   processSpawner?: ProcessSpawner;
+  /** Session ID to resume a previous session */
+  sessionId?: string;
 }
 
 export class DefaultClaudeAgent implements ClaudeAgent {
@@ -165,6 +170,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   private isProcessing = false;
   private inputQueue: string[] = [];
   private _contextUsage: ContextUsage | null = null;
+  private _sessionId: string | null = null;
+  private readonly _resumeSessionId: string | null = null;
 
   // Claude Code uses 200k token context by default
   private static readonly DEFAULT_MAX_CONTEXT_TOKENS = 200000;
@@ -179,6 +186,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.processSpawner = config.processSpawner || defaultSpawner;
     this.emitter = new EventEmitter();
     this.logger = getLogger('ClaudeAgent').withProject(config.projectId);
+    this._resumeSessionId = config.sessionId || null;
   }
 
   get status(): AgentStatus {
@@ -217,6 +225,10 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // In interactive mode, waiting when running but not processing
     // In autonomous mode, never waiting (unless there's a question)
     return this._mode === 'interactive' && this._status === 'running' && !this.isProcessing;
+  }
+
+  get sessionId(): string | null {
+    return this._sessionId;
   }
 
   start(instructions: string): void {
@@ -410,11 +422,32 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         queueLength: this.inputQueue.length,
         contentPreview: this.truncateForLog(input, 200),
       });
-      this.emitMessage('system', `Message queued (${this.inputQueue.length} in queue)`);
+      const preview = this.getMessagePreview(input);
+      this.emitMessage('system', `⏳ Queued (#${this.inputQueue.length}): ${preview}`);
       return;
     }
 
     this.writeInputToStdin(input);
+  }
+
+  removeQueuedMessage(index: number): boolean {
+    if (index < 0 || index >= this.inputQueue.length) {
+      this.logger.warn('removeQueuedMessage failed - invalid index', {
+        index,
+        queueLength: this.inputQueue.length,
+      });
+      return false;
+    }
+
+    const removed = this.inputQueue.splice(index, 1);
+    this.logger.info('Message removed from queue', {
+      index,
+      queueLength: this.inputQueue.length,
+      removedPreview: removed[0] ? this.truncateForLog(removed[0], 100) : '(empty)',
+    });
+    const preview = removed[0] ? this.getMessagePreview(removed[0]) : '(empty)';
+    this.emitMessage('system', `🗑️ Removed from queue: ${preview}`);
+    return true;
   }
 
   private writeInputToStdin(input: string): void {
@@ -465,7 +498,9 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     }
 
     const nextInput = this.inputQueue.shift()!;
-    this.emitMessage('system', `Processing queued message (${this.inputQueue.length} remaining)`);
+    const preview = this.getMessagePreview(nextInput);
+    const remaining = this.inputQueue.length > 0 ? ` (${this.inputQueue.length} remaining)` : '';
+    this.emitMessage('system', `▶️ Processing queued: ${preview}${remaining}`);
     this.writeInputToStdin(nextInput);
   }
 
@@ -496,6 +531,11 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // Add permission-related arguments
     this.addPermissionArgs(args);
 
+    // Resume session if session ID is provided
+    if (this._resumeSessionId) {
+      args.push('--session-id', this._resumeSessionId);
+    }
+
     // stream-json for both input and output (only works with --print)
     args.push('--input-format', 'stream-json');
     args.push('--output-format', 'stream-json');
@@ -520,6 +560,10 @@ export class DefaultClaudeAgent implements ClaudeAgent {
 
     if (this._permissions.disallowedTools && this._permissions.disallowedTools.length > 0) {
       args.push('--disallowedTools', ...this._permissions.disallowedTools);
+    }
+
+    if (this._permissions.appendSystemPrompt && this._permissions.appendSystemPrompt.trim().length > 0) {
+      args.push('--append-system-prompt', this._permissions.appendSystemPrompt.trim());
     }
   }
 
@@ -653,19 +697,22 @@ export class DefaultClaudeAgent implements ClaudeAgent {
           eventType: 'result',
           subtype: event.subtype,
         });
-        this.emitMessage('system', `Result: ${event.subtype || 'completed'}`);
         this.setProcessing(false);
         this.processNextQueuedInput();
         break;
 
       case 'system':
         if (event.subtype === 'init') {
+          // Capture session ID from Claude
+          if (event.session_id) {
+            this._sessionId = event.session_id;
+          }
+
           this.logger.info('STDOUT <<< System init', {
             direction: 'output',
             eventType: 'system',
             sessionId: event.session_id,
           });
-          this.emitMessage('system', `Session: ${event.session_id || 'new'}`);
         }
         break;
 
@@ -849,27 +896,147 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // Format based on tool type
     switch (name) {
       case 'Read':
-        return `Reading: ${String(input.file_path ?? 'file')}`;
+        return this.formatReadTool(input);
       case 'Write':
-        return `Writing: ${String(input.file_path ?? 'file')}`;
+        return this.formatWriteTool(input);
       case 'Edit':
-        return `Editing: ${String(input.file_path ?? 'file')}`;
+        return this.formatEditTool(input);
       case 'Bash':
         return `Running: ${this.truncate(String(input.command ?? ''), 80)}`;
       case 'Glob':
-        return `Searching: ${String(input.pattern ?? 'files')}`;
+        return this.formatGlobTool(input);
       case 'Grep':
-        return `Grep: ${this.truncate(String(input.pattern ?? ''), 50)}`;
+        return this.formatGrepTool(input);
       case 'Task':
-        return `Task: ${String(input.description ?? 'spawning agent')}`;
+        return this.formatTaskTool(input);
+      case 'WebFetch':
+        return this.formatWebFetchTool(input);
+      case 'WebSearch':
+        return `Searching web: ${this.truncate(String(input.query ?? ''), 60)}`;
       default:
         return `Using tool: ${name}`;
     }
   }
 
+  private formatReadTool(input: Record<string, unknown>): string {
+    const filePath = String(input.file_path ?? 'file');
+    const parts = [filePath];
+
+    if (input.offset !== undefined || input.limit !== undefined) {
+      const offset = input.offset !== undefined ? `offset: ${input.offset}` : '';
+      const limit = input.limit !== undefined ? `limit: ${input.limit}` : '';
+      const range = [offset, limit].filter(Boolean).join(', ');
+      parts.push(`(${range})`);
+    }
+
+    return `Reading: ${parts.join(' ')}`;
+  }
+
+  private formatWriteTool(input: Record<string, unknown>): string {
+    const filePath = String(input.file_path ?? 'file');
+    const contentLen = typeof input.content === 'string' ? input.content.length : 0;
+
+    if (contentLen > 0) {
+      return `Writing: ${filePath} (${this.formatBytes(contentLen)})`;
+    }
+
+    return `Writing: ${filePath}`;
+  }
+
+  private formatEditTool(input: Record<string, unknown>): string {
+    const filePath = String(input.file_path ?? 'file');
+    const oldLen = typeof input.old_string === 'string' ? input.old_string.length : 0;
+    const newLen = typeof input.new_string === 'string' ? input.new_string.length : 0;
+
+    if (oldLen > 0 || newLen > 0) {
+      return `Editing: ${filePath} (${oldLen} → ${newLen} chars)`;
+    }
+
+    return `Editing: ${filePath}`;
+  }
+
+  private formatGlobTool(input: Record<string, unknown>): string {
+    const pattern = String(input.pattern ?? 'files');
+    const searchPath = input.path ? ` in ${this.truncate(String(input.path), 30)}` : '';
+    return `Glob: ${pattern}${searchPath}`;
+  }
+
+  private formatGrepTool(input: Record<string, unknown>): string {
+    const pattern = this.truncate(String(input.pattern ?? ''), 40);
+    const parts = [`"${pattern}"`];
+
+    if (input.path) {
+      parts.push(`in ${this.truncate(String(input.path), 25)}`);
+    }
+
+    if (input.glob) {
+      parts.push(`(${input.glob})`);
+    } else if (input.type) {
+      parts.push(`(*.${input.type})`);
+    }
+
+    if (input.output_mode && input.output_mode !== 'files_with_matches') {
+      parts.push(`[${input.output_mode}]`);
+    }
+
+    if (input.head_limit) {
+      parts.push(`limit: ${input.head_limit}`);
+    }
+
+    return `Grep: ${parts.join(' ')}`;
+  }
+
+  private formatTaskTool(input: Record<string, unknown>): string {
+    const description = String(input.description ?? 'spawning agent');
+    const agentType = input.subagent_type ? ` (${input.subagent_type})` : '';
+    return `Task: ${description}${agentType}`;
+  }
+
+  private formatWebFetchTool(input: Record<string, unknown>): string {
+    const url = String(input.url ?? '');
+
+    try {
+      const urlObj = new URL(url);
+      return `Fetching: ${urlObj.hostname}${this.truncate(urlObj.pathname, 30)}`;
+    } catch {
+      return `Fetching: ${this.truncate(url, 50)}`;
+    }
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} bytes`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   private truncate(str: string, maxLen: number): string {
     if (str.length <= maxLen) return str;
     return str.substring(0, maxLen - 3) + '...';
+  }
+
+  private getMessagePreview(input: string): string {
+    // Check if it's multimodal content (JSON array)
+    try {
+      const parsed: unknown = JSON.parse(input);
+
+      if (Array.isArray(parsed)) {
+        const imageCount = (parsed as Array<{ type?: string }>).filter((b) => b.type === 'image').length;
+        const textBlock = (parsed as Array<{ type?: string; text?: string }>).find((b) => b.type === 'text');
+        const textPreview = textBlock?.text ? this.truncate(textBlock.text, 40) : '';
+
+        if (imageCount > 0 && textPreview) {
+          return `[${imageCount} image(s)] ${textPreview}`;
+        } else if (imageCount > 0) {
+          return `[${imageCount} image(s)]`;
+        }
+
+        return textPreview || '[multimodal content]';
+      }
+    } catch {
+      // Not JSON, treat as plain text
+    }
+
+    return this.truncate(input, 50);
   }
 
   private handleExit(code: number | null): void {
