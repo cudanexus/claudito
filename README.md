@@ -1,7 +1,7 @@
 # Claudito
 
-[![npm version](https://badge.fury.io/js/claudito.svg)](https://www.npmjs.com/package/claudito)
-[![CI](https://github.com/anthropics/claudito/actions/workflows/ci.yml/badge.svg)](https://github.com/anthropics/claudito/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/claudito.svg)](https://www.npmjs.com/package/claudito)
+[![CI](https://github.com/comfortablynumb/claudito/actions/workflows/ci.yml/badge.svg)](https://github.com/comfortablynumb/claudito/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **Warning**: This project is under active development. Features may change, and bugs are expected. Use at your own risk.
@@ -359,7 +359,7 @@ ws.send(JSON.stringify({ type: 'subscribe', projectId: 'your-project-id' }));
 ### Setup
 
 ```bash
-git clone https://github.com/anthropics/claudito.git
+git clone https://github.com/comfortablynumb/claudito.git
 cd claudito
 npm install
 ```
