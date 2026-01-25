@@ -86,7 +86,7 @@ conversations/
 - `POST /api/projects/:id/agent/interactive` - Start interactive agent session (body: {message?, images?, sessionId?, permissionMode?})
 - `POST /api/projects/:id/agent/send` - Send message to interactive agent
 - `POST /api/projects/:id/agent/stop` - Stop agent
-- `GET /api/projects/:id/agent/status` - Get agent status (includes mode, sessionId)
+- `GET /api/projects/:id/agent/status` - Get agent status (includes mode, sessionId, waitingVersion)
 - `GET /api/projects/:id/agent/context` - Get agent context usage (tokens, percentages)
 - `GET /api/projects/:id/agent/loop` - Get loop status
 - `GET /api/projects/:id/agent/queue` - Get queued messages
@@ -100,13 +100,14 @@ conversations/
 - `PUT /api/projects/:id/claude-files` - Save CLAUDE.md file (body: {filePath, content})
 - `GET /api/projects/:id/permissions` - Get project permission overrides
 - `PUT /api/projects/:id/permissions` - Update project permission overrides
+- `GET /api/projects/:id/optimizations` - Get project optimization suggestions (CLAUDE.md, ROADMAP.md)
 
 ## WebSocket Messages
 
 - `subscribe` / `unsubscribe` - Subscribe to project updates
 - `agent_message` - Real-time agent output
 - `agent_status` - Agent status changes
-- `agent_waiting` - Agent waiting for input status
+- `agent_waiting` - Agent waiting for input status (includes version for sync)
 - `queue_change` - Queue status updates
 - `roadmap_message` - Real-time roadmap generation output
 - `session_recovery` - Session couldn't be resumed, new conversation created
@@ -170,7 +171,7 @@ Conversations use UUID v4 IDs that also serve as Claude session IDs:
 
 ## Server Features
 
-- **Graceful Shutdown**: SIGINT/SIGTERM stops all running agents before server shutdown
+- **Graceful Shutdown**: SIGINT/SIGTERM stops all running agents and flushes pending conversation writes before server shutdown
 - **PID Tracking**: Agent PIDs persisted to `$HOME/.claudito/pids.json`, orphans verified and killed on startup
 - **Conversation Statistics**: Duration, message count, tool call count, total tokens displayed in UI (real-time updates)
 - **Context Usage Persistence**: Token usage saved to both conversation metadata and project status.json for historical tracking (viewable even when agent is stopped)

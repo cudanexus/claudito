@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { AgentMessage, ContextUsage } from '../agents';
 import { MilestoneItemRef } from './project';
-import { generateUUID } from '../utils';
+import { generateUUID, getLogger, Logger } from '../utils';
 
 export interface ConversationMetadata {
   contextUsage?: ContextUsage;
@@ -34,6 +34,8 @@ export interface ConversationRepository {
     conversationId: string,
     metadata: Partial<ConversationMetadata>
   ): Promise<void>;
+  // Wait for all pending write operations to complete
+  flush(): Promise<void>;
   // Legacy methods for backward compatibility
   addMessageLegacy(projectId: string, message: AgentMessage): Promise<void>;
   getMessagesLegacy(projectId: string, limit?: number): Promise<AgentMessage[]>;
@@ -50,7 +52,12 @@ export interface ConversationFileSystem {
 
 const defaultFileSystem: ConversationFileSystem = {
   readFile: (filePath) => fs.promises.readFile(filePath, 'utf-8'),
-  writeFile: (filePath, data) => fs.promises.writeFile(filePath, data, 'utf-8'),
+  writeFile: async (filePath, data) => {
+    // Atomic write: write to temp file, then rename
+    const tempPath = `${filePath}.tmp`;
+    await fs.promises.writeFile(tempPath, data, 'utf-8');
+    await fs.promises.rename(tempPath, filePath);
+  },
   exists: async (filePath) => {
     try {
       await fs.promises.access(filePath);
@@ -91,11 +98,50 @@ export class FileConversationRepository implements ConversationRepository {
   private readonly fileSystem: ConversationFileSystem;
   private readonly maxMessages: number;
   private readonly cache: Map<string, Conversation> = new Map();
+  private readonly pendingOperations: Set<Promise<unknown>> = new Set();
+  // Per-conversation write queues to prevent race conditions
+  private readonly writeQueues: Map<string, Promise<void>> = new Map();
+  private readonly logger: Logger;
 
   constructor(config: FileConversationRepositoryConfig) {
     this.projectPathResolver = config.projectPathResolver;
     this.fileSystem = config.fileSystem || defaultFileSystem;
     this.maxMessages = config.maxMessagesPerConversation || 1000;
+    this.logger = getLogger('conversation-repository');
+  }
+
+  async flush(): Promise<void> {
+    // Keep flushing until no more pending operations
+    // (operations can spawn other operations)
+    while (this.pendingOperations.size > 0) {
+      await Promise.all(Array.from(this.pendingOperations));
+    }
+
+    // Also wait for all write queues to complete
+    if (this.writeQueues.size > 0) {
+      await Promise.all(Array.from(this.writeQueues.values()));
+    }
+  }
+
+  private trackOperation<T>(promise: Promise<T>): Promise<T> {
+    this.pendingOperations.add(promise);
+    promise.finally(() => this.pendingOperations.delete(promise));
+    return promise;
+  }
+
+  // Serialize operations on a conversation to prevent race conditions
+  private async withConversationLock<T>(
+    projectId: string,
+    conversationId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const key = this.getCacheKey(projectId, conversationId);
+    const previousOperation = this.writeQueues.get(key) || Promise.resolve();
+
+    const newOperation = previousOperation.then(operation, operation);
+    this.writeQueues.set(key, newOperation.then(() => {}, () => {}));
+
+    return newOperation;
   }
 
   // Conversations are now stored in {project-root}/.claudito/conversations/
@@ -171,7 +217,8 @@ export class FileConversationRepository implements ConversationRepository {
     const conversations: Conversation[] = [];
 
     for (const file of files) {
-      if (!file.endsWith('.json')) {
+      // Skip non-JSON files and temp files
+      if (!file.endsWith('.json') || file.endsWith('.tmp.json')) {
         continue;
       }
 
@@ -215,20 +262,36 @@ export class FileConversationRepository implements ConversationRepository {
     conversationId: string,
     message: AgentMessage
   ): Promise<void> {
-    const conversation = await this.loadConversation(projectId, conversationId);
+    // Use lock to serialize concurrent message additions
+    return this.withConversationLock(projectId, conversationId, async () => {
+      // Always read fresh from disk inside the lock to get latest state
+      let conversation = await this.loadConversationFromDisk(projectId, conversationId);
 
-    if (!conversation) {
-      throw new Error(`Conversation ${conversationId} not found`);
-    }
+      if (!conversation) {
+        // Conversation doesn't exist (deleted or corrupted), create it
+        const filePath = this.getConversationPath(projectId, conversationId);
+        this.logger.warn('Conversation not found, creating new one', { projectId, conversationId, filePath });
 
-    conversation.messages.push(message);
+        const now = new Date().toISOString();
+        conversation = {
+          id: conversationId,
+          projectId,
+          itemRef: null,
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+      }
 
-    if (conversation.messages.length > this.maxMessages) {
-      conversation.messages.splice(0, conversation.messages.length - this.maxMessages);
-    }
+      conversation.messages.push(message);
 
-    conversation.updatedAt = new Date().toISOString();
-    await this.saveConversation(projectId, conversation);
+      if (conversation.messages.length > this.maxMessages) {
+        conversation.messages.splice(0, conversation.messages.length - this.maxMessages);
+      }
+
+      conversation.updatedAt = new Date().toISOString();
+      await this.saveConversation(projectId, conversation);
+    });
   }
 
   async getMessages(
@@ -286,18 +349,34 @@ export class FileConversationRepository implements ConversationRepository {
     conversationId: string,
     metadata: Partial<ConversationMetadata>
   ): Promise<void> {
-    const conversation = await this.loadConversation(projectId, conversationId);
+    // Use lock to serialize concurrent updates
+    return this.withConversationLock(projectId, conversationId, async () => {
+      // Always read fresh from disk inside the lock
+      let conversation = await this.loadConversationFromDisk(projectId, conversationId);
 
-    if (!conversation) {
-      throw new Error(`Conversation ${conversationId} not found`);
-    }
+      if (!conversation) {
+        // Conversation doesn't exist (deleted or corrupted), create it
+        const filePath = this.getConversationPath(projectId, conversationId);
+        this.logger.warn('Conversation not found for metadata update, creating new one', { projectId, conversationId, filePath });
 
-    conversation.metadata = {
-      ...conversation.metadata,
-      ...metadata,
-    };
-    conversation.updatedAt = new Date().toISOString();
-    await this.saveConversation(projectId, conversation);
+        const now = new Date().toISOString();
+        conversation = {
+          id: conversationId,
+          projectId,
+          itemRef: null,
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+      }
+
+      conversation.metadata = {
+        ...conversation.metadata,
+        ...metadata,
+      };
+      conversation.updatedAt = new Date().toISOString();
+      await this.saveConversation(projectId, conversation);
+    });
   }
 
   // Legacy methods - operate on a "current" or default conversation
@@ -324,6 +403,7 @@ export class FileConversationRepository implements ConversationRepository {
     return this.getMessages(projectId, mostRecent.id, limit);
   }
 
+  // Load from cache first, then disk
   private async loadConversation(
     projectId: string,
     conversationId: string
@@ -334,6 +414,14 @@ export class FileConversationRepository implements ConversationRepository {
       return { ...this.cache.get(cacheKey)! };
     }
 
+    return this.loadConversationFromDisk(projectId, conversationId);
+  }
+
+  // Always read fresh from disk, bypassing cache
+  private async loadConversationFromDisk(
+    projectId: string,
+    conversationId: string
+  ): Promise<Conversation | null> {
     const filePath = this.getConversationPath(projectId, conversationId);
 
     if (!filePath) {
@@ -349,14 +437,35 @@ export class FileConversationRepository implements ConversationRepository {
     try {
       const content = await this.fileSystem.readFile(filePath);
       const conversation = JSON.parse(content) as Conversation;
-      this.cache.set(cacheKey, conversation);
-      return { ...conversation };
-    } catch {
+      // Update cache with fresh data
+      const cacheKey = this.getCacheKey(projectId, conversationId);
+      this.cache.set(cacheKey, { ...conversation });
+      return conversation;
+    } catch (err) {
+      this.logger.error('Corrupted conversation file, removing', {
+        projectId,
+        conversationId,
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+
+      // Delete the corrupted file
+      try {
+        await this.fileSystem.unlink(filePath);
+      } catch {
+        // Ignore deletion errors
+      }
+
       return null;
     }
   }
 
   private async saveConversation(projectId: string, conversation: Conversation): Promise<void> {
+    const writeOperation = this.doSaveConversation(projectId, conversation);
+    return this.trackOperation(writeOperation);
+  }
+
+  private async doSaveConversation(projectId: string, conversation: Conversation): Promise<void> {
     const conversationsDir = this.getConversationsDir(projectId);
 
     if (!conversationsDir) {

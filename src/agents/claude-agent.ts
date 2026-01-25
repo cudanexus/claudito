@@ -40,7 +40,7 @@ export interface PlanModeInfo {
 }
 
 export interface AgentMessage {
-  type: 'stdout' | 'stderr' | 'system' | 'tool_use' | 'tool_result' | 'user' | 'question' | 'permission' | 'plan_mode';
+  type: 'stdout' | 'stderr' | 'system' | 'tool_use' | 'tool_result' | 'user' | 'question' | 'permission' | 'plan_mode' | 'compaction';
   content: string;
   timestamp: string;
   toolInfo?: ToolUseInfo;
@@ -49,11 +49,16 @@ export interface AgentMessage {
   planModeInfo?: PlanModeInfo;
 }
 
+export interface WaitingStatus {
+  isWaiting: boolean;
+  version: number;
+}
+
 export interface AgentEvents {
   message: (message: AgentMessage) => void;
   status: (status: AgentStatus) => void;
   exit: (code: number | null) => void;
-  waitingForInput: (isWaiting: boolean) => void;
+  waitingForInput: (status: WaitingStatus) => void;
 }
 
 export interface ProcessInfo {
@@ -83,6 +88,7 @@ export interface ClaudeAgent {
   readonly queuedMessageCount: number;
   readonly queuedMessages: string[];
   readonly isWaitingForInput: boolean;
+  readonly waitingVersion: number;
   readonly sessionId: string | null;
   readonly sessionError: string | null;
   start(instructions: string): void;
@@ -184,6 +190,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   private isProcessing = false;
   private inputQueue: string[] = [];
   private _contextUsage: ContextUsage | null = null;
+  private _waitingVersion = 0;
   private _sessionId: string | null = null;
   private readonly _configuredSessionId: string | null = null;
   private readonly _isNewSession: boolean = true;
@@ -242,6 +249,10 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // In interactive mode, waiting when running but not processing
     // In autonomous mode, never waiting (unless there's a question)
     return this._mode === 'interactive' && this._status === 'running' && !this.isProcessing;
+  }
+
+  get waitingVersion(): number {
+    return this._waitingVersion;
   }
 
   get sessionId(): string | null {
@@ -532,7 +543,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     const isWaiting = this.isWaitingForInput;
 
     if (wasWaiting !== isWaiting) {
-      this.emitter.emit('waitingForInput', isWaiting);
+      this._waitingVersion++;
+      this.emitter.emit('waitingForInput', { isWaiting, version: this._waitingVersion });
     }
   }
 
@@ -763,7 +775,27 @@ export class DefaultClaudeAgent implements ClaudeAgent {
             eventType: 'system',
             sessionId: event.session_id,
           });
+        } else if (event.subtype === 'compact' || event.subtype === 'summary') {
+          // Context compaction/summarization event
+          this.logger.info('STDOUT <<< Context compaction', {
+            direction: 'output',
+            eventType: 'system',
+            subtype: event.subtype,
+          });
+          const summary = this.extractEventContent(event);
+          this.emitCompactionMessage(summary);
         }
+        break;
+
+      case 'compact':
+      case 'summary':
+        // Handle top-level compaction events (alternative format)
+        this.logger.info('STDOUT <<< Context compaction', {
+          direction: 'output',
+          eventType: event.type,
+        });
+        const compactionContent = this.extractEventContent(event);
+        this.emitCompactionMessage(compactionContent);
         break;
 
       case 'user':
@@ -1206,6 +1238,42 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     }
 
     return this.truncate(input, 50);
+  }
+
+  private extractEventContent(event: StreamEvent): string {
+    if (typeof event.content === 'string') {
+      return event.content;
+    }
+
+    if (Array.isArray(event.content)) {
+      return event.content
+        .filter((block) => block.type === 'text' && block.text)
+        .map((block) => block.text)
+        .join('\n');
+    }
+
+    if (event.message?.content) {
+      return event.message.content
+        .filter((block) => block.type === 'text' && block.text)
+        .map((block) => block.text || '')
+        .join('\n');
+    }
+
+    return '';
+  }
+
+  private emitCompactionMessage(summary: string): void {
+    const message: AgentMessage = {
+      type: 'compaction',
+      content: summary || 'Context was compacted to reduce token usage.',
+      timestamp: new Date().toISOString(),
+    };
+
+    this.logger.info('Emitting compaction message', {
+      summaryLength: summary.length,
+    });
+
+    this.emitter.emit('message', message);
   }
 
   private handleExit(code: number | null): void {

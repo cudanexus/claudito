@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
-import { AgentManager, AgentMessage, QueuedProject, AgentResourceStatus, ContextUsage } from '../agents';
+import { AgentManager, AgentMessage, QueuedProject, AgentResourceStatus, ContextUsage, WaitingStatus } from '../agents';
 import { RoadmapGenerator, RoadmapMessage } from '../services';
 import { getLogger, Logger } from '../utils/logger';
 
@@ -16,7 +16,7 @@ export type WebSocketMessageData =
   | QueuedProject[]
   | AgentResourceStatus
   | RoadmapMessage
-  | boolean // For waiting status
+  | WaitingStatus
   | string; // Covers AgentStatus and 'connected' messages
 
 export interface SessionRecoveryData {
@@ -194,11 +194,11 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
       });
     });
 
-    this.agentManager.on('waitingForInput', (projectId, isWaiting) => {
+    this.agentManager.on('waitingForInput', (projectId, isWaiting, version) => {
       this.broadcast({
         type: 'agent_waiting',
         projectId,
-        data: isWaiting,
+        data: { isWaiting, version },
       });
     });
 

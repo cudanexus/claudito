@@ -69,6 +69,7 @@ export interface FileSystem {
   existsSync(filePath: string): boolean;
   mkdirSync(dirPath: string, options: { recursive: boolean }): void;
   rmdirSync(dirPath: string, options: { recursive: boolean }): void;
+  renameSync(oldPath: string, newPath: string): void;
 }
 
 const defaultFileSystem: FileSystem = {
@@ -77,6 +78,7 @@ const defaultFileSystem: FileSystem = {
   existsSync: (filePath) => fs.existsSync(filePath),
   mkdirSync: (dirPath, options) => fs.mkdirSync(dirPath, options),
   rmdirSync: (dirPath, options) => fs.rmSync(dirPath, options),
+  renameSync: (oldPath, newPath) => fs.renameSync(oldPath, newPath),
 };
 
 export function generateIdFromPath(projectPath: string): string {
@@ -267,7 +269,10 @@ export class FileProjectRepository implements ProjectRepository {
     this.statusCache.set(status.id, status);
     const statusPath = this.getStatusPath(status.path);
     const data = JSON.stringify(status, null, 2);
-    this.fileSystem.writeFileSync(statusPath, data);
+    // Atomic write: write to temp file, then rename
+    const tempPath = `${statusPath}.tmp`;
+    this.fileSystem.writeFileSync(tempPath, data);
+    this.fileSystem.renameSync(tempPath, statusPath);
   }
 
   findAll(): Promise<ProjectStatus[]> {

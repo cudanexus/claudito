@@ -76,7 +76,8 @@
     },
     devMode: false,
     isModeSwitching: false, // UI blocked during permission mode switch
-    debugExpandedLogs: {} // Track expanded log items by ID: { logId: true }
+    debugExpandedLogs: {}, // Track expanded log items by ID: { logId: true }
+    waitingVersion: 0 // Version number for waiting status updates
   };
 
   // Local storage keys for browser-specific settings
@@ -1176,6 +1177,10 @@
       return renderPlanModeMessage(msg);
     }
 
+    if (msg.type === 'compaction') {
+      return renderCompactionMessage(msg);
+    }
+
     if (msg.type === 'user') {
       var userHtml = '<div class="conversation-message user">' +
         '<div class="message-header">' +
@@ -1361,6 +1366,32 @@
           'Reject Plan' +
         '</button>' +
       '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderCompactionMessage(msg) {
+    var html = '<div class="conversation-message compaction bg-amber-900/30 border-l-2 border-amber-500 p-3 rounded">' +
+      '<div class="flex items-center gap-2 mb-2">' +
+        '<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>' +
+        '</svg>' +
+        '<span class="font-medium text-amber-300">Context Compacted</span>' +
+      '</div>' +
+      '<div class="text-gray-300 text-sm">' +
+        'The conversation history was summarized to reduce token usage. Previous context has been condensed.' +
+      '</div>';
+
+    // Show the summary if provided
+    if (msg.content && msg.content !== 'Context was compacted to reduce token usage.') {
+      html += '<details class="mt-2">' +
+        '<summary class="text-amber-400 text-xs cursor-pointer hover:text-amber-300">View Summary</summary>' +
+        '<div class="mt-2 text-gray-400 text-xs bg-gray-800/50 p-2 rounded max-h-40 overflow-y-auto">' +
+          '<pre class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</pre>' +
+        '</div>' +
+      '</details>';
     }
 
     html += '</div>';
@@ -4318,11 +4349,21 @@
       closeModal('modal-optimizations');
 
       if (action === 'create') {
-        // Create CLAUDE.md file with template content
-        var template = '# Project Context\n\nAdd project-specific instructions for Claude here.\n';
+        // Determine template based on file name
+        var fileName = filePath.split(/[\\\/]/).pop();
+        var template = '';
+
+        if (fileName === 'CLAUDE.md') {
+          template = '# Project Context\n\nAdd project-specific instructions for Claude here.\n';
+        } else if (fileName === 'ROADMAP.md') {
+          template = '# Project Roadmap\n\n## Phase 1: Initial Setup\n\n### Milestone 1.1: Project Foundation\n\n- [ ] First task\n- [ ] Second task\n';
+        } else {
+          template = '';
+        }
+
         api.writeFile(filePath, template)
           .done(function() {
-            showToast('CLAUDE.md created', 'success');
+            showToast(fileName + ' created', 'success');
 
             // Refresh file browser if project files tab is active
             if (state.activeTab === 'project-files') {
@@ -4334,10 +4375,45 @@
             }
 
             // Open the file in editor
-            openFile(filePath, 'CLAUDE.md');
+            openFile(filePath, fileName);
           })
-          .fail(function() {
-            showToast('Failed to create CLAUDE.md', 'error');
+          .fail(function(xhr) {
+            // Check if parent directory doesn't exist
+            if (xhr.status === 500 || xhr.status === 404) {
+              // Try to create parent directory first
+              var parentPath = filePath.substring(0, filePath.lastIndexOf(/[\\\/]/.test(filePath) ? (filePath.indexOf('\\') !== -1 ? '\\' : '/') : '/'));
+
+              if (parentPath && parentPath !== filePath) {
+                api.createFolder(parentPath)
+                  .done(function() {
+                    // Retry file creation
+                    api.writeFile(filePath, template)
+                      .done(function() {
+                        showToast(fileName + ' created', 'success');
+
+                        if (state.activeTab === 'project-files') {
+                          var project = findProjectById(state.selectedProjectId);
+
+                          if (project) {
+                            loadFileTree(project.path);
+                          }
+                        }
+
+                        openFile(filePath, fileName);
+                      })
+                      .fail(function() {
+                        showToast('Failed to create ' + fileName, 'error');
+                      });
+                  })
+                  .fail(function() {
+                    showToast('Failed to create ' + fileName, 'error');
+                  });
+              } else {
+                showToast('Failed to create ' + fileName, 'error');
+              }
+            } else {
+              showToast('Failed to create ' + fileName, 'error');
+            }
           });
       } else if (action === 'edit') {
         // Open file in editor
@@ -5061,10 +5137,13 @@
               setModeSwitchingState(false);
 
               // Clear waiting state since we're sending a message
+              // Clear waiting state since we're sending a message
+              // Increment version to ignore stale updates from server
               var project = findProjectById(projectId);
 
               if (project) {
                 project.isWaitingForInput = false;
+                state.waitingVersion++;
                 renderProjectList();
               }
 
@@ -5262,8 +5341,10 @@
     state.messageSending = true;
 
     // Mark as no longer waiting for input since we're sending a message
-    if (project && project.isWaitingForInput) {
+    // Increment version to ignore stale updates from server
+    if (project) {
       project.isWaitingForInput = false;
+      state.waitingVersion++;
       renderProjectList();
     }
 
@@ -5323,8 +5404,10 @@
     state.agentStarting = true;
 
     // Mark as no longer waiting for input since we're starting with a message
-    if (project && project.isWaitingForInput) {
+    // Increment version to ignore stale updates from server
+    if (project) {
       project.isWaitingForInput = false;
+      state.waitingVersion++;
       renderProjectList();
     }
 
@@ -5717,10 +5800,15 @@
           state.currentSessionId = data.sessionId;
         }
 
-        // Update isWaitingForInput on the project
+        // Update isWaitingForInput on the project (only if server version is newer)
         if (project && typeof data.isWaitingForInput === 'boolean') {
-          project.isWaitingForInput = data.isWaitingForInput;
-          updateWaitingIndicator(data.isWaitingForInput);
+          var serverVersion = data.waitingVersion || 0;
+
+          if (serverVersion > state.waitingVersion) {
+            state.waitingVersion = serverVersion;
+            project.isWaitingForInput = data.isWaitingForInput;
+            updateWaitingIndicator(data.isWaitingForInput);
+          }
         }
 
         if (data.status === 'running' && data.mode) {
@@ -6047,22 +6135,27 @@
           state.currentSessionId = response.sessionId;
         }
 
-        // Update isWaitingForInput from polling response
+        // Update isWaitingForInput from polling response (only if server version is newer)
         if (project && typeof response.isWaitingForInput === 'boolean') {
-          var wasWaiting = project.isWaitingForInput;
-          project.isWaitingForInput = response.isWaitingForInput;
+          var serverVersion = response.waitingVersion || 0;
 
-          // If waiting state changed, update UI and apply pending mode changes
-          if (wasWaiting !== response.isWaitingForInput) {
-            // Always re-render project list to update sidebar indicator
-            renderProjectList();
+          if (serverVersion > state.waitingVersion) {
+            state.waitingVersion = serverVersion;
+            var wasWaiting = project.isWaitingForInput;
+            project.isWaitingForInput = response.isWaitingForInput;
 
-            if (state.selectedProjectId === projectId) {
-              updateWaitingIndicator(response.isWaitingForInput);
-              updateCancelButton();
+            // If waiting state changed, update UI and apply pending mode changes
+            if (wasWaiting !== response.isWaitingForInput) {
+              // Always re-render project list to update sidebar indicator
+              renderProjectList();
 
-              if (response.isWaitingForInput) {
-                applyPendingPermissionModeIfNeeded();
+              if (state.selectedProjectId === projectId) {
+                updateWaitingIndicator(response.isWaitingForInput);
+                updateCancelButton();
+
+                if (response.isWaitingForInput) {
+                  applyPendingPermissionModeIfNeeded();
+                }
               }
             }
           }
@@ -6342,8 +6435,19 @@
     }
   }
 
-  function handleAgentWaiting(projectId, isWaiting) {
+  function handleAgentWaiting(projectId, data) {
     var project = findProjectById(projectId);
+
+    // data is now { isWaiting, version }
+    var isWaiting = data.isWaiting;
+    var serverVersion = data.version || 0;
+
+    // Skip update if server version is not newer than our local version
+    if (serverVersion <= state.waitingVersion) {
+      return;
+    }
+
+    state.waitingVersion = serverVersion;
 
     if (project) {
       project.isWaitingForInput = isWaiting;

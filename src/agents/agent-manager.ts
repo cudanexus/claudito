@@ -28,7 +28,7 @@ import { getLogger, Logger, getPidTracker, PidTracker, isValidUUID } from '../ut
 export interface AgentManagerEvents {
   message: (projectId: string, message: AgentMessage) => void;
   status: (projectId: string, status: AgentStatus) => void;
-  waitingForInput: (projectId: string, isWaiting: boolean) => void;
+  waitingForInput: (projectId: string, isWaiting: boolean, version: number) => void;
   queueChange: (queue: QueuedProject[]) => void;
   milestoneStarted: (projectId: string, milestone: MilestoneRef) => void;
   milestoneCompleted: (projectId: string, milestone: MilestoneRef, reason: string) => void;
@@ -106,6 +106,7 @@ export interface AgentManager {
   isRunning(projectId: string): boolean;
   isQueued(projectId: string): boolean;
   isWaitingForInput(projectId: string): boolean;
+  getWaitingVersion(projectId: string): number;
   getResourceStatus(): AgentResourceStatus;
   removeFromQueue(projectId: string): void;
   setMaxConcurrentAgents(max: number): void;
@@ -171,6 +172,7 @@ export class DefaultAgentManager implements AgentManager {
   private _maxConcurrentAgents: number;
   private readonly logger: Logger;
   private readonly pidTracker: PidTracker;
+  private readonly pendingMessageSaves: Set<Promise<unknown>> = new Set();
   private readonly listeners: EventListeners = {
     message: new Set(),
     status: new Set(),
@@ -356,13 +358,25 @@ export class DefaultAgentManager implements AgentManager {
     };
 
     // Save to conversation history (but don't emit - frontend already shows it)
-    void this.projectRepository.findById(projectId).then((project) => {
+    const savePromise = this.projectRepository.findById(projectId).then((project) => {
       if (project?.currentConversationId) {
-        this.conversationRepository
+        return this.conversationRepository
           .addMessage(projectId, project.currentConversationId, message)
-          .catch(() => {});
+          .catch((err) => {
+            this.logger.error('Failed to save user message to conversation', {
+              projectId,
+              conversationId: project.currentConversationId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+      } else {
+        this.logger.warn('No currentConversationId for project, user message not saved', {
+          projectId,
+        });
       }
+      return Promise.resolve();
     });
+    this.trackMessageSave(savePromise);
 
     // Build multimodal content if images are provided
     const content = this.buildMultimodalContent(input, images);
@@ -789,6 +803,14 @@ export class DefaultAgentManager implements AgentManager {
     this.queue.length = 0;
     this.emit('queueChange', []);
 
+    // Ensure all pending message saves complete (including findById lookups)
+    this.logger.info('Flushing pending message saves...');
+    await this.flushPendingMessageSaves();
+
+    // Ensure all pending conversation writes complete before returning
+    this.logger.info('Flushing pending conversation writes...');
+    await this.conversationRepository.flush();
+
     this.logger.info('All agents stopped');
   }
 
@@ -808,6 +830,11 @@ export class DefaultAgentManager implements AgentManager {
   isWaitingForInput(projectId: string): boolean {
     const agent = this.agents.get(projectId);
     return agent?.isWaitingForInput ?? false;
+  }
+
+  getWaitingVersion(projectId: string): number {
+    const agent = this.agents.get(projectId);
+    return agent?.waitingVersion ?? 0;
   }
 
   getResourceStatus(): AgentResourceStatus {
@@ -890,6 +917,18 @@ export class DefaultAgentManager implements AgentManager {
     this.listeners[event].delete(listener);
   }
 
+  private trackMessageSave<T>(promise: Promise<T>): Promise<T> {
+    this.pendingMessageSaves.add(promise);
+    promise.finally(() => this.pendingMessageSaves.delete(promise));
+    return promise;
+  }
+
+  private async flushPendingMessageSaves(): Promise<void> {
+    while (this.pendingMessageSaves.size > 0) {
+      await Promise.all(Array.from(this.pendingMessageSaves));
+    }
+  }
+
   private setupAgentListeners(agent: ClaudeAgent): void {
     const messageListener = (message: AgentMessage): void => {
       this.emit('message', agent.projectId, message);
@@ -899,24 +938,41 @@ export class DefaultAgentManager implements AgentManager {
 
       if (loopState?.currentConversationId) {
         // Autonomous mode - use loop state conversation
-        this.conversationRepository
+        const savePromise = this.conversationRepository
           .addMessage(agent.projectId, loopState.currentConversationId, message)
           .catch(() => {});
+        this.trackMessageSave(savePromise);
 
         // Save context usage if available
         this.saveContextUsageIfNeeded(agent, loopState.currentConversationId);
       } else if (agent.mode === 'interactive') {
         // Interactive mode - use project's current conversation
-        void this.projectRepository.findById(agent.projectId).then((project) => {
+        const savePromise = this.projectRepository.findById(agent.projectId).then((project) => {
           if (project?.currentConversationId) {
-            this.conversationRepository
-              .addMessage(agent.projectId, project.currentConversationId, message)
-              .catch(() => {});
-
-            // Save context usage if available
-            this.saveContextUsageIfNeeded(agent, project.currentConversationId);
+            const conversationId = project.currentConversationId;
+            return this.conversationRepository
+              .addMessage(agent.projectId, conversationId, message)
+              .then(() => {
+                // Save context usage if available
+                this.saveContextUsageIfNeeded(agent, conversationId);
+              })
+              .catch((err) => {
+                this.logger.error('Failed to save message to conversation', {
+                  projectId: agent.projectId,
+                  conversationId,
+                  messageType: message.type,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+          } else {
+            this.logger.warn('No currentConversationId for project, message not saved', {
+              projectId: agent.projectId,
+              messageType: message.type,
+            });
           }
+          return Promise.resolve();
         });
+        this.trackMessageSave(savePromise);
       }
     };
 
@@ -925,8 +981,8 @@ export class DefaultAgentManager implements AgentManager {
       void this.handleStatusChange(agent.projectId, status);
     };
 
-    const waitingListener = (isWaiting: boolean): void => {
-      this.emit('waitingForInput', agent.projectId, isWaiting);
+    const waitingListener = ({ isWaiting, version }: { isWaiting: boolean; version: number }): void => {
+      this.emit('waitingForInput', agent.projectId, isWaiting, version);
     };
 
     const exitListener = (code: number | null): void => {
@@ -1057,11 +1113,13 @@ export class DefaultAgentManager implements AgentManager {
     }
 
     // Save to conversation metadata
-    this.conversationRepository
+    const savePromise = this.conversationRepository
       .updateMetadata(agent.projectId, conversationId, { contextUsage })
       .catch(() => {});
+    this.trackMessageSave(savePromise);
 
     // Also save to project status for persistence when agent is stopped
+    // (this is synchronous internally, no need to track)
     this.projectRepository
       .updateContextUsage(agent.projectId, contextUsage)
       .catch(() => {});

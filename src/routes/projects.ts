@@ -518,8 +518,9 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     const mode = agentManager.getAgentMode(id);
     const queuedMessageCount = agentManager.getQueuedMessageCount(id);
     const isWaitingForInput = agentManager.isWaitingForInput(id);
+    const waitingVersion = agentManager.getWaitingVersion(id);
     const sessionId = agentManager.getSessionId(id);
-    res.json({ status, queued: isQueued, mode, queuedMessageCount, isWaitingForInput, sessionId });
+    res.json({ status, queued: isQueued, mode, queuedMessageCount, isWaitingForInput, waitingVersion, sessionId });
   }));
 
   // Get context usage for running agent or last saved usage
@@ -965,6 +966,25 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       }
     } catch {
       // Global CLAUDE.md doesn't exist - this is fine, not a warning
+    }
+
+    // Check for ROADMAP.md
+    const roadmapPath = path.join(project.path, 'doc', 'ROADMAP.md');
+
+    try {
+      await fs.promises.stat(roadmapPath);
+      // File exists - no action needed
+    } catch {
+      // ROADMAP.md doesn't exist
+      optimizations.push({
+        id: 'roadmap-missing',
+        severity: 'info',
+        title: 'No ROADMAP.md file',
+        description: 'Creating a doc/ROADMAP.md file allows you to persist your project roadmap and select complete phases, milestones, or individual tasks from this app.',
+        action: 'create',
+        actionLabel: 'Create ROADMAP.md',
+        filePath: roadmapPath,
+      });
     }
 
     res.json({
