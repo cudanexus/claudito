@@ -53,6 +53,8 @@ conversations/
 - `RoadmapParser` - Parse ROADMAP.md into structured data
 - `RoadmapGenerator` - Generate ROADMAP.md via Claude
 - `InstructionGenerator` - Generate agent instructions from template
+- `GitService` - Git operations via simple-git library
+- `EventManager` - In-memory event bus for decoupled component communication
 - `ClaudeAgent` - Claude Code CLI process management
 - `AgentManager` - Multi-agent lifecycle + autonomous loop
 - `ProjectWebSocketServer` - Real-time updates via WebSocket
@@ -131,7 +133,7 @@ Agent manager runs autonomous loop that:
 - `NODE_ENV` - Environment (development/production/test)
 - `LOG_LEVEL` - Log level (debug/info/warn/error)
 - `MAX_CONCURRENT_AGENTS` - Max concurrent agents (default: 3)
-- `DEV_MODE` - Enable dev mode (default: true in development, false in production)
+- `DEV_MODE` or `CLAUDITO_DEV_MODE` - Enable dev mode (default: true in development, false in production). Dev mode shows experimental features like the Git tab.
 
 ## Commands
 
