@@ -3,6 +3,67 @@
   --claudito-font-size: 14px;
 }
 
+/* Search highlight styles */
+.search-highlight {
+  background-color: rgba(251, 191, 36, 0.4);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.search-highlight.current {
+  background-color: rgba(251, 191, 36, 0.8);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.4);
+}
+
+/* Ensure search highlights are visible in all message types */
+.conversation-message .search-highlight {
+  color: inherit;
+}
+
+/* Special handling for code blocks */
+.markdown-content pre .search-highlight,
+.markdown-content code .search-highlight {
+  background-color: rgba(251, 191, 36, 0.5);
+}
+
+/* Tool use messages */
+.conversation-message.tool-use .search-highlight {
+  background-color: rgba(251, 191, 36, 0.5);
+}
+
+/* Message type filter - hidden messages */
+.conversation-message.filter-hidden {
+  display: none !important;
+}
+
+/* History search results */
+.history-search-result {
+  border-left: 3px solid #8b5cf6;
+  background: rgba(139, 92, 246, 0.1);
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.history-search-result .history-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #a78bfa;
+  margin-bottom: 0.25rem;
+  cursor: pointer;
+}
+
+.history-search-result .history-result-header:hover {
+  color: #c4b5fd;
+}
+
+.history-search-result .history-result-content {
+  font-size: 0.8125rem;
+  color: #d1d5db;
+}
+
 html {
   font-size: 13px;
 }

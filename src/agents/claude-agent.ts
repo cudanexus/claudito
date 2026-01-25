@@ -788,7 +788,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         break;
 
       case 'compact':
-      case 'summary':
+      case 'summary': {
         // Handle top-level compaction events (alternative format)
         this.logger.info('STDOUT <<< Context compaction', {
           direction: 'output',
@@ -797,6 +797,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         const compactionContent = this.extractEventContent(event);
         this.emitCompactionMessage(compactionContent);
         break;
+      }
 
       case 'user':
         this.handleUserEvent(event);

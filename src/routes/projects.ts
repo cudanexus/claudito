@@ -731,6 +731,26 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     res.json({ conversations });
   }));
 
+  // Search conversations by content
+  router.get('/:id/conversations/search', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params['id'] as string;
+    const query = req.query['q'] as string;
+
+    if (!query || query.length < 2) {
+      res.json([]);
+      return;
+    }
+
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const results = await conversationRepository.searchMessages(id, query);
+    res.json(results);
+  }));
+
   // Rename a conversation
   router.put('/:id/conversations/:conversationId', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;

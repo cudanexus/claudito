@@ -75,6 +75,21 @@
       currentFile: null // { path, name, content, originalContent, size, isGlobal }
     },
     devMode: false,
+    // Search state
+    search: {
+      isOpen: false,
+      query: '',
+      matches: [],      // Array of highlight span elements
+      currentIndex: -1,
+      filters: {
+        user: true,
+        assistant: true,
+        tool: true,
+        system: true
+      },
+      searchHistory: false,
+      historyResults: []  // Results from history search API
+    },
     isModeSwitching: false, // UI blocked during permission mode switch
     debugExpandedLogs: {}, // Track expanded log items by ID: { logId: true }
     waitingVersion: 0 // Version number for waiting status updates
@@ -266,6 +281,9 @@
     getConversation: function(projectId, conversationId) {
       return $.get('/api/projects/' + projectId + '/conversation', { conversationId: conversationId });
     },
+    searchConversationHistory: function(projectId, query) {
+      return $.get('/api/projects/' + projectId + '/conversations/search', { q: query });
+    },
     getContextUsage: function(id) {
       return $.get('/api/projects/' + id + '/agent/context');
     },
@@ -405,6 +423,346 @@
     div.textContent = text;
     return div.innerHTML;
   }
+
+  // ============================================================
+  // Search functionality
+  // ============================================================
+
+  function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function openSearch() {
+    state.search.isOpen = true;
+    $('#search-controls').removeClass('hidden');
+    $('#search-input').focus().select();
+  }
+
+  function closeSearch() {
+    state.search.isOpen = false;
+    $('#search-controls').addClass('hidden');
+    $('#search-filter-dropdown').addClass('hidden');
+    $('#search-input').val('');
+    clearSearchHighlights();
+    clearHistorySearchResults();
+    resetMessageTypeFilters();
+    state.search.query = '';
+    state.search.matches = [];
+    state.search.currentIndex = -1;
+    state.search.historyResults = [];
+    updateSearchCounter();
+  }
+
+  function performSearch(query) {
+    // Clear previous highlights
+    clearSearchHighlights();
+    clearHistorySearchResults();
+
+    state.search.query = query;
+    state.search.matches = [];
+    state.search.currentIndex = -1;
+    state.search.historyResults = [];
+
+    if (!query || query.length < 1) {
+      updateSearchCounter();
+      return;
+    }
+
+    var $conversation = $('#conversation');
+    var searchRegex = new RegExp(escapeRegExp(query), 'gi');
+
+    // Find all text nodes within visible conversation messages
+    $conversation.find('.conversation-message').each(function() {
+      // Skip filtered/hidden messages
+      if ($(this).hasClass('filter-hidden')) {
+        return;
+      }
+
+      // Check message type filter
+      var msgType = $(this).attr('data-msg-type');
+
+      if (msgType && !state.search.filters[msgType]) {
+        return;
+      }
+
+      findAndHighlightMatches(this, searchRegex);
+    });
+
+    updateSearchCounter();
+
+    // Jump to first match if any
+    if (state.search.matches.length > 0) {
+      state.search.currentIndex = 0;
+      highlightCurrentMatch();
+    }
+
+    // Search history if enabled
+    if (state.search.searchHistory && state.selectedProjectId && query.length >= 2) {
+      searchConversationHistory(query);
+    }
+  }
+
+  function findAndHighlightMatches(element, regex) {
+    var walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function(node) {
+          // Skip empty text nodes and script/style content
+          if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+          var parent = node.parentElement;
+
+          if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
+            return NodeFilter.FILTER_REJECT;
+          }
+
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    var textNodes = [];
+    var node;
+
+    while (node = walker.nextNode()) {
+      textNodes.push(node);
+    }
+
+    // Process text nodes in reverse order to maintain valid offsets
+    textNodes.reverse().forEach(function(textNode) {
+      var text = textNode.textContent;
+      var match;
+      var lastIndex = 0;
+      var fragments = [];
+
+      regex.lastIndex = 0; // Reset regex
+
+      while ((match = regex.exec(text)) !== null) {
+        // Text before match
+        if (match.index > lastIndex) {
+          fragments.push(document.createTextNode(text.substring(lastIndex, match.index)));
+        }
+
+        // Create highlight span for match
+        var highlightSpan = document.createElement('span');
+        highlightSpan.className = 'search-highlight';
+        highlightSpan.textContent = match[0];
+        fragments.push(highlightSpan);
+
+        // Track this match
+        state.search.matches.push(highlightSpan);
+
+        lastIndex = regex.lastIndex;
+      }
+
+      // Remaining text after last match
+      if (lastIndex < text.length) {
+        fragments.push(document.createTextNode(text.substring(lastIndex)));
+      }
+
+      // Replace text node with fragments if we found matches
+      if (fragments.length > 0 && lastIndex > 0) {
+        var parent = textNode.parentNode;
+        fragments.forEach(function(fragment) {
+          parent.insertBefore(fragment, textNode);
+        });
+        parent.removeChild(textNode);
+      }
+    });
+
+    // Reverse matches array to maintain document order (since we processed in reverse)
+    state.search.matches.reverse();
+  }
+
+  function clearSearchHighlights() {
+    // Remove all search highlight spans and restore original text
+    $('.search-highlight').each(function() {
+      var $span = $(this);
+      var textNode = document.createTextNode($span.text());
+      $span.replaceWith(textNode);
+    });
+
+    // Normalize text nodes (merge adjacent text nodes)
+    $('#conversation').find('.conversation-message').each(function() {
+      this.normalize();
+    });
+
+    state.search.matches = [];
+  }
+
+  function updateSearchCounter() {
+    var total = state.search.matches.length;
+    var current = state.search.currentIndex + 1;
+
+    if (total === 0) {
+      $('#search-counter').text('');
+      $('#btn-search-prev, #btn-search-next').prop('disabled', true);
+    } else {
+      $('#search-counter').text(current + ' of ' + total);
+      $('#btn-search-prev, #btn-search-next').prop('disabled', false);
+    }
+  }
+
+  function highlightCurrentMatch() {
+    // Remove current class from all highlights
+    $('.search-highlight').removeClass('current');
+
+    if (state.search.currentIndex >= 0 && state.search.currentIndex < state.search.matches.length) {
+      var match = state.search.matches[state.search.currentIndex];
+      $(match).addClass('current');
+
+      // Scroll match into view
+      scrollToSearchMatch(match);
+    }
+
+    updateSearchCounter();
+  }
+
+  function scrollToSearchMatch(element) {
+    var $container = $('#conversation-container');
+    var $element = $(element);
+
+    var containerTop = $container.scrollTop();
+    var containerHeight = $container.height();
+    var elementTop = $element.offset().top - $container.offset().top + containerTop;
+    var elementHeight = $element.outerHeight();
+
+    // Calculate target scroll position (center the element if possible)
+    var targetScroll = elementTop - (containerHeight / 2) + (elementHeight / 2);
+
+    // Ensure we don't scroll past boundaries
+    var maxScroll = $container[0].scrollHeight - containerHeight;
+    targetScroll = Math.max(0, Math.min(targetScroll, maxScroll));
+
+    // Temporarily disable auto-scroll lock detection
+    state.agentOutputScrollLock = true;
+
+    $container.animate({ scrollTop: targetScroll }, 150, function() {
+      // Re-enable scroll lock detection after animation
+      setTimeout(function() {
+        state.agentOutputScrollLock = false;
+      }, 100);
+    });
+  }
+
+  function goToNextMatch() {
+    if (state.search.matches.length === 0) return;
+
+    state.search.currentIndex = (state.search.currentIndex + 1) % state.search.matches.length;
+    highlightCurrentMatch();
+  }
+
+  function goToPrevMatch() {
+    if (state.search.matches.length === 0) return;
+
+    state.search.currentIndex = state.search.currentIndex - 1;
+
+    if (state.search.currentIndex < 0) {
+      state.search.currentIndex = state.search.matches.length - 1;
+    }
+
+    highlightCurrentMatch();
+  }
+
+  function applyMessageTypeFilters() {
+    var $conversation = $('#conversation');
+
+    $conversation.find('.conversation-message').each(function() {
+      var msgType = $(this).attr('data-msg-type');
+
+      if (!msgType) {
+        // Messages without type are always shown
+        $(this).removeClass('filter-hidden');
+        return;
+      }
+
+      var isVisible = state.search.filters[msgType];
+      $(this).toggleClass('filter-hidden', !isVisible);
+    });
+  }
+
+  function resetMessageTypeFilters() {
+    state.search.filters = {
+      user: true,
+      assistant: true,
+      tool: true,
+      system: true
+    };
+    state.search.searchHistory = false;
+
+    $('#filter-user, #filter-assistant, #filter-tool, #filter-system').prop('checked', true);
+    $('#filter-history').prop('checked', false);
+    $('#conversation').find('.conversation-message').removeClass('filter-hidden');
+  }
+
+  function clearHistorySearchResults() {
+    $('#conversation').find('.history-search-result').remove();
+    state.search.historyResults = [];
+  }
+
+  function searchConversationHistory(query) {
+    if (!state.selectedProjectId) return;
+
+    api.searchConversationHistory(state.selectedProjectId, query)
+      .done(function(results) {
+        state.search.historyResults = results;
+        renderHistorySearchResults(results, query);
+      })
+      .fail(function(xhr) {
+        console.error('History search failed:', xhr);
+      });
+  }
+
+  function renderHistorySearchResults(results, query) {
+    if (!results || results.length === 0) return;
+
+    var $conversation = $('#conversation');
+    var searchRegex = new RegExp('(' + escapeRegExp(query) + ')', 'gi');
+
+    // Add history results section at the top
+    var html = '<div class="history-search-results mb-4">' +
+      '<div class="text-xs text-purple-400 mb-2 font-semibold">Found in conversation history (' + results.length + ' matches)</div>';
+
+    results.forEach(function(result) {
+      var highlightedContent = escapeHtml(result.content).replace(searchRegex, '<span class="search-highlight">$1</span>');
+      var label = result.label || formatDate(result.createdAt);
+      var convId = result.conversationId;
+
+      html += '<div class="history-search-result" data-conversation-id="' + escapeHtml(convId) + '">' +
+        '<div class="history-result-header" onclick="window.loadHistoryConversation(\'' + escapeHtml(convId) + '\')">' +
+          '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
+          '</svg>' +
+          '<span>' + escapeHtml(label) + '</span>' +
+          '<span class="text-gray-500">(' + escapeHtml(result.messageType) + ')</span>' +
+        '</div>' +
+        '<div class="history-result-content">' + highlightedContent + '</div>' +
+      '</div>';
+    });
+
+    html += '</div>';
+
+    $conversation.prepend(html);
+  }
+
+  // Global function to load a history conversation from search results
+  window.loadHistoryConversation = function(conversationId) {
+    if (!state.selectedProjectId) return;
+
+    // Find and select this conversation in the history dropdown
+    var $select = $('#select-conversation-history');
+    var $option = $select.find('option[value="' + conversationId + '"]');
+
+    if ($option.length > 0) {
+      $select.val(conversationId).trigger('change');
+    } else {
+      // Conversation not in current dropdown, load it directly
+      loadConversation(state.selectedProjectId, conversationId);
+    }
+
+    // Close search
+    closeSearch();
+  };
 
   // Read file cache management
   var READ_FILE_CACHE_LIMIT = 10;
@@ -958,7 +1316,6 @@
     if (!project) {
       $('#project-detail').addClass('hidden');
       $('#empty-state').removeClass('hidden');
-      $('#conversation-header').addClass('hidden');
       renderProjectOverview();
       return;
     }
@@ -1109,13 +1466,10 @@
           .text(capitalizeFirst(statusClass));
 
     if (statusClass === 'running') {
-      $('#conversation-header').removeClass('hidden');
       $('#mode-selector').addClass('disabled');
     } else if (statusClass === 'queued') {
-      $('#conversation-header').addClass('hidden');
       $('#mode-selector').addClass('disabled');
     } else {
-      $('#conversation-header').addClass('hidden');
       $('#mode-selector').removeClass('disabled');
       state.currentAgentMode = null;
     }
@@ -1182,7 +1536,7 @@
     }
 
     if (msg.type === 'user') {
-      var userHtml = '<div class="conversation-message user">' +
+      var userHtml = '<div class="conversation-message user" data-msg-type="user">' +
         '<div class="message-header">' +
           '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
             '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>' +
@@ -1212,7 +1566,7 @@
     // Render stdout/assistant messages with markdown and Claude icon
     if (msg.type === 'stdout' || msg.type === 'assistant') {
       var renderedContent = renderMarkdown(msg.content);
-      return '<div class="conversation-message ' + typeClass + ' markdown-content">' +
+      return '<div class="conversation-message ' + typeClass + ' markdown-content" data-msg-type="assistant">' +
         '<div class="message-header claude-header">' +
           '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">' +
             '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>' +
@@ -1223,7 +1577,7 @@
       '</div>';
     }
 
-    return '<div class="conversation-message ' + typeClass + '">' +
+    return '<div class="conversation-message ' + typeClass + '" data-msg-type="system">' +
       '<pre class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</pre>' +
     '</div>';
   }
@@ -1251,7 +1605,7 @@
     var options = info.options || [];
     var header = info.header || 'Question';
 
-    var html = '<div class="conversation-message question">' +
+    var html = '<div class="conversation-message question" data-msg-type="system">' +
       '<div class="question-header">' +
         '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
@@ -1293,7 +1647,7 @@
     var action = info.action || msg.content;
     var details = info.details || {};
 
-    var html = '<div class="conversation-message permission">' +
+    var html = '<div class="conversation-message permission" data-msg-type="system">' +
       '<div class="permission-header">' +
         '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>' +
@@ -1344,7 +1698,7 @@
       }
     }
 
-    var html = '<div class="conversation-message plan-mode ' + bgClass + ' border-l-2 p-3 rounded">' +
+    var html = '<div class="conversation-message plan-mode ' + bgClass + ' border-l-2 p-3 rounded" data-msg-type="system">' +
       '<div class="flex items-center gap-2 mb-2">' +
         '<svg class="w-5 h-5 ' + iconClass + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="' + iconPath + '"/>' +
@@ -1373,7 +1727,7 @@
   }
 
   function renderCompactionMessage(msg) {
-    var html = '<div class="conversation-message compaction bg-amber-900/30 border-l-2 border-amber-500 p-3 rounded">' +
+    var html = '<div class="conversation-message compaction bg-amber-900/30 border-l-2 border-amber-500 p-3 rounded" data-msg-type="system">' +
       '<div class="flex items-center gap-2 mb-2">' +
         '<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>' +
@@ -1416,7 +1770,7 @@
       status: status
     };
 
-    var html = '<div class="conversation-message tool-use" data-tool-id="' + escapeHtml(toolId) + '">' +
+    var html = '<div class="conversation-message tool-use" data-tool-id="' + escapeHtml(toolId) + '" data-msg-type="tool">' +
       '<div class="tool-header">' +
         iconHtml +
         '<span class="tool-name">' + escapeHtml(toolName) + '</span>' +
@@ -3852,7 +4206,84 @@
     });
 
     $(document).on('keydown', function(e) {
-      if (e.key === 'Escape') closeAllModals();
+      if (e.key === 'Escape') {
+        if (state.search.isOpen) {
+          closeSearch();
+        } else {
+          closeAllModals();
+        }
+      }
+    });
+
+    // Search keyboard shortcut - Ctrl+F to open search
+    $(document).on('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        // Only activate when agent output tab is visible and not in an input/textarea
+        if ($('#tab-content-agent-output').is(':visible') &&
+            !$(e.target).is('input, textarea')) {
+          e.preventDefault();
+          openSearch();
+        }
+      }
+    });
+
+    // Search input event handlers
+    $('#search-input').on('input', function() {
+      var query = $(this).val();
+      performSearch(query);
+    });
+
+    $('#search-input').on('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+
+        if (e.shiftKey) {
+          goToPrevMatch();
+        } else {
+          goToNextMatch();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSearch();
+      }
+    });
+
+    // Search navigation buttons
+    $('#btn-search-next').on('click', goToNextMatch);
+    $('#btn-search-prev').on('click', goToPrevMatch);
+    $('#btn-search-close').on('click', closeSearch);
+
+    // Search filter dropdown toggle
+    $('#btn-search-filter').on('click', function(e) {
+      e.stopPropagation();
+      $('#search-filter-dropdown').toggleClass('hidden');
+    });
+
+    // Close filter dropdown when clicking outside
+    $(document).on('click', function(e) {
+      if (!$(e.target).closest('#search-filter-dropdown, #btn-search-filter').length) {
+        $('#search-filter-dropdown').addClass('hidden');
+      }
+    });
+
+    // Filter checkbox change handlers
+    $('#filter-user, #filter-assistant, #filter-tool, #filter-system').on('change', function() {
+      var filterId = $(this).attr('id').replace('filter-', '');
+      state.search.filters[filterId] = $(this).is(':checked');
+      applyMessageTypeFilters();
+
+      if (state.search.query) {
+        performSearch(state.search.query);
+      }
+    });
+
+    // Search history checkbox
+    $('#filter-history').on('change', function() {
+      state.search.searchHistory = $(this).is(':checked');
+
+      if (state.search.query) {
+        performSearch(state.search.query);
+      }
     });
   }
 
@@ -4635,6 +5066,11 @@
     var project = findProjectById(projectId);
     var wasRunning = project && project.status === 'running';
 
+    // Clear search when starting new conversation
+    if (state.search.isOpen) {
+      closeSearch();
+    }
+
     // Clear read file cache when starting new conversation
     clearReadFileCache();
 
@@ -4815,6 +5251,11 @@
 
   function loadConversation(conversationId) {
     if (!state.selectedProjectId) return;
+
+    // Clear search when switching conversations
+    if (state.search.isOpen) {
+      closeSearch();
+    }
 
     state.currentConversationId = conversationId;
 
@@ -6588,15 +7029,8 @@
   }
 
   function updateAgentOutputHeader(projectId, status) {
-    if (projectId !== state.selectedProjectId) {
-      return;
-    }
-
-    if (status === 'running') {
-      $('#conversation-header').removeClass('hidden');
-    } else {
-      $('#conversation-header').addClass('hidden');
-    }
+    // No longer needed - removed duplicate "Agent Output (live)" header
+    // The agent status is already shown in the toolbar
   }
 
   function handleRoadmapMessage(projectId, message) {

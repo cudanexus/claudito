@@ -376,7 +376,7 @@ export class DefaultAgentManager implements AgentManager {
       }
       return Promise.resolve();
     });
-    this.trackMessageSave(savePromise);
+    void this.trackMessageSave(savePromise);
 
     // Build multimodal content if images are provided
     const content = this.buildMultimodalContent(input, images);
@@ -919,7 +919,7 @@ export class DefaultAgentManager implements AgentManager {
 
   private trackMessageSave<T>(promise: Promise<T>): Promise<T> {
     this.pendingMessageSaves.add(promise);
-    promise.finally(() => this.pendingMessageSaves.delete(promise));
+    void promise.finally(() => this.pendingMessageSaves.delete(promise));
     return promise;
   }
 
@@ -941,7 +941,7 @@ export class DefaultAgentManager implements AgentManager {
         const savePromise = this.conversationRepository
           .addMessage(agent.projectId, loopState.currentConversationId, message)
           .catch(() => {});
-        this.trackMessageSave(savePromise);
+        void this.trackMessageSave(savePromise);
 
         // Save context usage if available
         this.saveContextUsageIfNeeded(agent, loopState.currentConversationId);
@@ -972,7 +972,7 @@ export class DefaultAgentManager implements AgentManager {
           }
           return Promise.resolve();
         });
-        this.trackMessageSave(savePromise);
+        void this.trackMessageSave(savePromise);
       }
     };
 
@@ -1116,7 +1116,7 @@ export class DefaultAgentManager implements AgentManager {
     const savePromise = this.conversationRepository
       .updateMetadata(agent.projectId, conversationId, { contextUsage })
       .catch(() => {});
-    this.trackMessageSave(savePromise);
+    void this.trackMessageSave(savePromise);
 
     // Also save to project status for persistence when agent is stopped
     // (this is synchronous internally, no need to track)

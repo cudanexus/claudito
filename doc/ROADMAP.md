@@ -117,11 +117,11 @@ Improved output navigation and search.
 
 ### Milestone 6.1: Search in Output
 
-- [ ] Add search input in agent output header
-- [ ] Highlight search matches in output
-- [ ] Navigate between matches (next/previous)
-- [ ] Filter output by message type (user, assistant, tool, system)
-- [ ] Search across conversation history
+- [x] Add search input in agent output header
+- [x] Highlight search matches in output
+- [x] Navigate between matches (next/previous)
+- [x] Filter output by message type (user, assistant, tool, system)
+- [x] Search across conversation history
 
 ### Milestone 6.2: Keyboard Shortcuts
 

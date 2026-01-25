@@ -53,6 +53,16 @@ function createMockFileSystem(): FileSystem & {
         }
       }
     }),
+    renameSync: jest.fn((oldPath: string, newPath: string) => {
+      const normalizedOld = normalizePath(oldPath);
+      const normalizedNew = normalizePath(newPath);
+      const content = files.get(normalizedOld);
+
+      if (content !== undefined) {
+        files.delete(normalizedOld);
+        files.set(normalizedNew, content);
+      }
+    }),
   };
 }
 

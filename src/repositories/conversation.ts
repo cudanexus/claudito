@@ -20,6 +20,14 @@ export interface Conversation {
   metadata?: ConversationMetadata;
 }
 
+export interface SearchResult {
+  conversationId: string;
+  messageType: string;
+  content: string;
+  createdAt: string;
+  label?: string;
+}
+
 export interface ConversationRepository {
   create(projectId: string, itemRef: MilestoneItemRef | null): Promise<Conversation>;
   findById(projectId: string, conversationId: string): Promise<Conversation | null>;
@@ -34,6 +42,7 @@ export interface ConversationRepository {
     conversationId: string,
     metadata: Partial<ConversationMetadata>
   ): Promise<void>;
+  searchMessages(projectId: string, query: string): Promise<SearchResult[]>;
   // Wait for all pending write operations to complete
   flush(): Promise<void>;
   // Legacy methods for backward compatibility
@@ -125,7 +134,7 @@ export class FileConversationRepository implements ConversationRepository {
 
   private trackOperation<T>(promise: Promise<T>): Promise<T> {
     this.pendingOperations.add(promise);
-    promise.finally(() => this.pendingOperations.delete(promise));
+    void promise.finally(() => this.pendingOperations.delete(promise));
     return promise;
   }
 
@@ -401,6 +410,63 @@ export class FileConversationRepository implements ConversationRepository {
     }
 
     return this.getMessages(projectId, mostRecent.id, limit);
+  }
+
+  async searchMessages(projectId: string, query: string): Promise<SearchResult[]> {
+    const results: SearchResult[] = [];
+    const lowerQuery = query.toLowerCase();
+    const conversations = await this.getByProject(projectId);
+    const maxResults = 50;
+    const contextChars = 100;
+
+    for (const conv of conversations) {
+      if (results.length >= maxResults) {
+        break;
+      }
+
+      const fullConv = await this.loadConversation(projectId, conv.id);
+
+      if (!fullConv) {
+        continue;
+      }
+
+      for (const message of fullConv.messages) {
+        if (results.length >= maxResults) {
+          break;
+        }
+
+        const content = message.content || '';
+        const lowerContent = content.toLowerCase();
+        const matchIndex = lowerContent.indexOf(lowerQuery);
+
+        if (matchIndex === -1) {
+          continue;
+        }
+
+        // Extract context around the match
+        const start = Math.max(0, matchIndex - contextChars);
+        const end = Math.min(content.length, matchIndex + query.length + contextChars);
+        let snippet = content.substring(start, end);
+
+        if (start > 0) {
+          snippet = '...' + snippet;
+        }
+
+        if (end < content.length) {
+          snippet = snippet + '...';
+        }
+
+        results.push({
+          conversationId: conv.id,
+          messageType: message.type,
+          content: snippet,
+          createdAt: fullConv.createdAt,
+          label: fullConv.label,
+        });
+      }
+    }
+
+    return results;
   }
 
   // Load from cache first, then disk
