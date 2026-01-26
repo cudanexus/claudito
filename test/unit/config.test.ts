@@ -30,7 +30,7 @@ describe('EnvironmentConfigLoader', () => {
         env: 'development',
         logLevel: 'info',
         maxConcurrentAgents: 3,
-        devMode: true, // true because env defaults to 'development'
+        devMode: false,
       });
     });
 
