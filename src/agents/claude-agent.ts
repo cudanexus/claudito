@@ -44,7 +44,7 @@ export interface ResultInfo {
 }
 
 export interface StatusChangeInfo {
-  status: 'compacting' | 'ready' | string;
+  status: string;
 }
 
 export interface AgentMessage {
