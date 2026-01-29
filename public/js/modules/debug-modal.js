@@ -15,6 +15,56 @@
   var state, api, escapeHtml, showToast, openModal;
   var formatDateTime, formatLogTime, formatBytes;
 
+  // Full-screen log viewer state
+  var fullScreenLogData = null;
+  var currentLogsData = { allLogs: [], ioLogs: [] };
+
+  /**
+   * Format a value for display, prettifying JSON strings
+   */
+  function formatValue(value) {
+    if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    var str = String(value);
+
+    // Try to parse and prettify JSON strings
+    if (str.startsWith('{') || str.startsWith('[')) {
+      try {
+        var parsed = JSON.parse(str);
+        return JSON.stringify(parsed, null, 2);
+      } catch (e) {
+        // Not valid JSON, return as-is
+      }
+    }
+
+    return str;
+  }
+
+  /**
+   * Format a log entry for copying to clipboard
+   */
+  function formatLogForCopy(log) {
+    var lines = [];
+    lines.push('[' + (log.level || 'LOG').toUpperCase() + '] ' + log.message);
+    lines.push('Timestamp: ' + log.timestamp);
+
+    if (log.name) {
+      lines.push('Logger: ' + log.name);
+    }
+
+    if (log.context && Object.keys(log.context).length > 0) {
+      lines.push('Context:');
+
+      Object.keys(log.context).forEach(function(key) {
+        lines.push('  ' + key + ': ' + formatValue(log.context[key]));
+      });
+    }
+
+    return lines.join('\n');
+  }
+
   /**
    * Initialize the module with dependencies
    */
@@ -38,19 +88,129 @@
       $('#log-filter-' + key).prop('checked', state.debugLogFilters[key]);
     });
 
+    // Fetch logs once on open (no auto-refresh)
     refresh();
-    startAutoRefresh();
   }
 
   function close() {
     state.debugPanelOpen = false;
     state.debugExpandedLogs = {}; // Clear expanded state on close
-    stopAutoRefresh();
+    closeLogFullScreen(); // Close full-screen view if open
   }
 
+  /**
+   * Open full-screen view for a log entry
+   */
+  function openLogFullScreen(log) {
+    fullScreenLogData = log;
+    renderFullScreenLog();
+    $('#debug-log-fullscreen').removeClass('hidden');
+  }
+
+  /**
+   * Close full-screen log viewer
+   */
+  function closeLogFullScreen() {
+    fullScreenLogData = null;
+    $('#debug-log-fullscreen').addClass('hidden');
+  }
+
+  /**
+   * Render full-screen log content
+   */
+  function renderFullScreenLog() {
+    if (!fullScreenLogData) return;
+
+    var log = fullScreenLogData;
+    var levelClass = getLevelClass(log.level);
+    var levelBgClass = getLevelBadgeClass(log.level);
+
+    // Update level badge
+    var $levelBadge = $('#debug-log-fullscreen-level');
+    $levelBadge
+      .removeClass('bg-red-500 bg-yellow-500 bg-blue-500 bg-gray-500 text-white text-gray-900')
+      .addClass(levelBgClass)
+      .text(log.level ? log.level.toUpperCase() : 'LOG');
+
+    var html = '<div class="space-y-4">';
+
+    // Header section
+    html += '<div class="bg-gray-800 rounded-lg p-4">';
+    html += '<div class="grid grid-cols-1 md:grid-cols-3 gap-4">';
+
+    // Timestamp
+    html += '<div>';
+    html += '<div class="text-gray-500 text-xs mb-1">Timestamp</div>';
+    html += '<div class="text-gray-300">' + formatDateTime(log.timestamp) + '</div>';
+    html += '</div>';
+
+    // Logger name
+    if (log.name) {
+      html += '<div>';
+      html += '<div class="text-gray-500 text-xs mb-1">Logger</div>';
+      html += '<div class="text-gray-300">' + escapeHtml(log.name) + '</div>';
+      html += '</div>';
+    }
+
+    // Direction (for I/O logs)
+    if (log.context && log.context.direction) {
+      html += '<div>';
+      html += '<div class="text-gray-500 text-xs mb-1">Direction</div>';
+      var dirColor = log.context.direction === 'input' ? 'text-blue-400' : 'text-green-400';
+      var dirLabel = log.context.direction === 'input' ? 'STDIN >>>' : 'STDOUT <<<';
+      html += '<div class="' + dirColor + ' font-semibold">' + dirLabel + '</div>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+    html += '</div>';
+
+    // Message section
+    html += '<div class="bg-gray-800 rounded-lg p-4">';
+    html += '<div class="text-gray-500 text-xs mb-2">Message</div>';
+    html += '<pre class="text-gray-200 whitespace-pre-wrap break-words text-sm">' + escapeHtml(log.message) + '</pre>';
+    html += '</div>';
+
+    // Context section
+    if (log.context && Object.keys(log.context).length > 0) {
+      html += '<div class="bg-gray-800 rounded-lg p-4">';
+      html += '<div class="text-gray-500 text-xs mb-3">Context</div>';
+      html += '<div class="space-y-3">';
+
+      Object.keys(log.context).forEach(function(key) {
+        var valueStr = formatValue(log.context[key]);
+
+        html += '<div>';
+        html += '<div class="text-purple-400 text-xs font-semibold mb-1">' + escapeHtml(key) + '</div>';
+        html += '<pre class="bg-gray-900 rounded p-3 text-gray-300 text-xs whitespace-pre-wrap break-words">' + escapeHtml(valueStr) + '</pre>';
+        html += '</div>';
+      });
+
+      html += '</div>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+
+    $('#debug-log-fullscreen-content').html(html);
+  }
+
+  /**
+   * Get badge class for log level
+   */
+  function getLevelBadgeClass(level) {
+    switch (level) {
+      case 'error': return 'bg-red-500 text-white';
+      case 'warn': return 'bg-yellow-500 text-gray-900';
+      case 'info': return 'bg-blue-500 text-white';
+      case 'debug': return 'bg-gray-500 text-white';
+      default: return 'bg-gray-500 text-white';
+    }
+  }
+
+  // Keep for backward compatibility but these are no longer used
   function startAutoRefresh() {
-    stopAutoRefresh();
-    state.debugRefreshInterval = setInterval(refresh, 2000);
+    // Auto-refresh disabled - user must click refresh button
   }
 
   function stopAutoRefresh() {
@@ -61,11 +221,44 @@
   }
 
   function refresh() {
-    if (!state.selectedProjectId || !state.debugPanelOpen) return;
+    if (!state.debugPanelOpen) return;
 
-    api.getDebugInfo(state.selectedProjectId, 100)
-      .done(function(data) {
-        render(data);
+    // Fetch global logs (always available, even without a project selected)
+    api.getGlobalLogs(200)
+      .done(function(globalLogsResponse) {
+        var globalLogs = (globalLogsResponse && globalLogsResponse.logs) || [];
+
+        // If we have a project selected, also fetch project-specific debug info
+        if (state.selectedProjectId) {
+          api.getDebugInfo(state.selectedProjectId, 100)
+            .done(function(projectData) {
+              projectData.globalLogs = globalLogs;
+              render(projectData);
+            })
+            .fail(function() {
+              // Project debug info failed, but we can still show global logs
+              render({
+                processInfo: null,
+                loopState: null,
+                lastCommand: null,
+                recentLogs: [],
+                trackedProcesses: [],
+                memoryUsage: null,
+                globalLogs: globalLogs
+              });
+            });
+        } else {
+          // No project selected, just show global logs
+          render({
+            processInfo: null,
+            loopState: null,
+            lastCommand: null,
+            recentLogs: [],
+            trackedProcesses: [],
+            memoryUsage: null,
+            globalLogs: globalLogs
+          });
+        }
       })
       .fail(function() {
         $('#debug-process-content').html('<div class="text-red-400">Failed to load debug info</div>');
@@ -86,6 +279,9 @@
     var ioLogs = (data.recentLogs || []).filter(function(log) {
       return log.context && log.context.direction;
     });
+
+    // Store for full-screen viewer access
+    currentLogsData.ioLogs = ioLogs;
 
     html += '<div class="flex items-center justify-between mb-3">';
     html += '<span class="text-gray-400 text-sm">Showing ' + ioLogs.length + ' Claude I/O events</span>';
@@ -123,6 +319,17 @@
         }
 
         html += '<span class="text-gray-400 flex-1 truncate">' + escapeHtml(log.message) + '</span>';
+
+        // Copy button
+        html += '<button class="btn-copy-log flex-shrink-0 text-gray-500 hover:text-green-400 transition-colors p-1" title="Copy log">';
+        html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>';
+        html += '</button>';
+
+        // View Full button
+        html += '<button class="btn-view-full-log flex-shrink-0 text-gray-500 hover:text-blue-400 transition-colors p-1" title="View full log">';
+        html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>';
+        html += '</button>';
+
         html += '<svg class="w-4 h-4 text-gray-500 flex-shrink-0 debug-log-chevron' + (isExpanded ? ' rotate-180' : '') + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
         html += '</div>';
 
@@ -138,8 +345,7 @@
         if (log.context) {
           Object.keys(log.context).forEach(function(key) {
             if (key === 'direction') return;
-            var value = log.context[key];
-            var valueStr = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+            var valueStr = formatValue(log.context[key]);
             html += '<div>';
             html += '<span class="text-gray-500 text-xs">' + escapeHtml(key) + ':</span>';
 
@@ -378,7 +584,13 @@
   function renderLogsTab(data) {
     var html = '';
 
-    var filteredLogs = (data.recentLogs || []).filter(function(log) {
+    // Use global logs which include all server logs (not just project-specific)
+    var allLogs = data.globalLogs || data.recentLogs || [];
+
+    // Store for full-screen viewer access
+    currentLogsData.allLogs = allLogs;
+
+    var filteredLogs = allLogs.filter(function(log) {
       var isFrontend = log.context && log.context.type === 'frontend';
 
       if (isFrontend && !state.debugLogFilters.frontend) {
@@ -392,7 +604,7 @@
       return true;
     });
 
-    var totalLogs = data.recentLogs ? data.recentLogs.length : 0;
+    var totalLogs = allLogs.length;
     html += '<div class="flex items-center justify-between mb-3">';
     html += '<span class="text-gray-400 text-sm">Showing ' + filteredLogs.length + ' of ' + totalLogs + ' log entries (click to expand)</span>';
     html += '</div>';
@@ -426,6 +638,16 @@
 
         html += '<span class="text-gray-300 flex-1 truncate">' + escapeHtml(log.message) + '</span>';
 
+        // Copy button
+        html += '<button class="btn-copy-log flex-shrink-0 text-gray-500 hover:text-green-400 transition-colors p-1" title="Copy log">';
+        html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>';
+        html += '</button>';
+
+        // View Full button
+        html += '<button class="btn-view-full-log flex-shrink-0 text-gray-500 hover:text-blue-400 transition-colors p-1" title="View full log">';
+        html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>';
+        html += '</button>';
+
         if (hasContext) {
           html += '<svg class="w-4 h-4 text-gray-500 flex-shrink-0 debug-log-chevron' + (isExpanded ? ' rotate-180' : '') + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
         }
@@ -438,8 +660,7 @@
           html += '<div class="space-y-2">';
 
           Object.keys(log.context).forEach(function(key) {
-            var value = log.context[key];
-            var valueStr = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+            var valueStr = formatValue(log.context[key]);
 
             html += '<div>';
             html += '<span class="text-gray-500 text-xs">' + escapeHtml(key) + ':</span>';
@@ -572,6 +793,90 @@
 
       if ($('#debug-tab-logs').is(':visible')) {
         refresh();
+      }
+    });
+
+    // View Full button click handler
+    $(document).on('click', '.btn-view-full-log', function(e) {
+      e.stopPropagation(); // Prevent log item expand/collapse
+
+      var $item = $(this).closest('.debug-log-item');
+      var logIndex = parseInt($item.data('log-index'), 10);
+      var logType = $item.data('log-type');
+
+      var log = null;
+
+      if (logType === 'io') {
+        log = currentLogsData.ioLogs[logIndex];
+      } else if (logType === 'all') {
+        // For filtered logs, we need to find the actual log
+        var allLogs = currentLogsData.allLogs;
+        var filteredLogs = allLogs.filter(function(l) {
+          var isFrontend = l.context && l.context.type === 'frontend';
+
+          if (isFrontend && !state.debugLogFilters.frontend) {
+            return false;
+          }
+
+          if (!state.debugLogFilters[l.level]) {
+            return false;
+          }
+
+          return true;
+        });
+        log = filteredLogs[logIndex];
+      }
+
+      if (log) {
+        openLogFullScreen(log);
+      }
+    });
+
+    // Close full-screen log viewer
+    $('#btn-close-fullscreen-log').on('click', function() {
+      closeLogFullScreen();
+    });
+
+    // Copy log button click handler
+    $(document).on('click', '.btn-copy-log', function(e) {
+      e.stopPropagation();
+
+      var $item = $(this).closest('.debug-log-item');
+      var logIndex = parseInt($item.data('log-index'), 10);
+      var logType = $item.data('log-type');
+
+      var log = null;
+
+      if (logType === 'io') {
+        log = currentLogsData.ioLogs[logIndex];
+      } else if (logType === 'all') {
+        var filteredLogs = currentLogsData.allLogs.filter(function(l) {
+          var isFrontend = l.context && l.context.type === 'frontend';
+
+          if (isFrontend && !state.debugLogFilters.frontend) {
+            return false;
+          }
+
+          if (!state.debugLogFilters[l.level]) {
+            return false;
+          }
+
+          return true;
+        });
+        log = filteredLogs[logIndex];
+      }
+
+      if (log) {
+        var text = formatLogForCopy(log);
+        copyToClipboard(text);
+      }
+    });
+
+    // Escape key to close full-screen viewer
+    $(document).on('keydown', function(e) {
+      if (e.key === 'Escape' && !$('#debug-log-fullscreen').hasClass('hidden')) {
+        closeLogFullScreen();
+        e.stopPropagation();
       }
     });
   }

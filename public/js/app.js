@@ -25,6 +25,8 @@
   var TaskDisplayModule = window.TaskDisplayModule;
   var PermissionModeModule = window.PermissionModeModule;
   var FolderBrowserModule = window.FolderBrowserModule;
+  var PromptTemplatesModule = window.PromptTemplatesModule;
+  var ClaudeCommandsModule = window.ClaudeCommandsModule;
 
   // Alias for backward compatibility within this file
   var api = ApiClient;
@@ -114,7 +116,11 @@
         system: true
       },
       searchHistory: false,
-      historyResults: []  // Results from history search API
+      historyResults: [],  // Results from history search API
+      options: {
+        regex: false,
+        caseSensitive: false
+      }
     },
     isModeSwitching: false, // UI blocked during permission mode switch
     debugExpandedLogs: {}, // Track expanded log items by ID: { logId: true }
@@ -134,7 +140,8 @@
     gitContextTarget: null, // { path, type, status } for git context menu
     activePromptType: null, // 'question' | 'permission' | 'plan_mode' | null - blocks input while prompt is active
     isGitOperating: false, // Blocks git UI during operations
-    shellEnabled: true // Whether shell tab is available (disabled when server bound to 0.0.0.0)
+    shellEnabled: true, // Whether shell tab is available (disabled when server bound to 0.0.0.0)
+    projectInputs: {} // Per-project input text: { projectId: 'input text' }
   };
 
   // Local storage keys - use module's KEYS
@@ -221,19 +228,6 @@
   function showErrorToast(xhr, defaultMessage) {
     var message = getErrorMessage(xhr) || defaultMessage || 'An error occurred';
     showToast(message, 'error');
-  }
-
-  function showSlashCommandWarning(command) {
-    var warningMessage = {
-      type: 'system',
-      content: 'The ' + command + ' command is not available through the API. Some commands are supported directly via buttons in the interface (e.g., Context Usage, Clear).',
-      timestamp: new Date().toISOString()
-    };
-
-    if (state.selectedProjectId) {
-      appendMessage(state.selectedProjectId, warningMessage);
-      scrollConversationToBottom();
-    }
   }
 
   // Use module function
@@ -857,6 +851,18 @@
         setPromptBlockingState('plan_mode');
       }
 
+      // Block input during compaction
+      if (message.type === 'status_change' && message.statusChangeInfo) {
+        if (message.statusChangeInfo.status === 'compacting') {
+          setPromptBlockingState('compacting');
+        }
+      }
+
+      // Unblock input after compaction completes (compaction message follows status_change)
+      if (message.type === 'compaction' && state.activePromptType === 'compacting') {
+        setPromptBlockingState(null);
+      }
+
       scrollConversationToBottom();
     }
   }
@@ -1100,24 +1106,6 @@
       }
     });
 
-    // Milestone expand/collapse toggle
-    $(document).on('click', '.milestone-header', function(e) {
-      var $header = $(this);
-      var key = $header.data('milestone-key');
-      var isExpanded = toggleMilestoneExpanded(key);
-      var $container = $header.closest('.milestone-container');
-      var $tasks = $container.find('.milestone-tasks');
-      var $chevron = $header.find('.milestone-chevron');
-
-      if (isExpanded) {
-        $tasks.slideDown(200);
-        $chevron.addClass('rotate-90');
-      } else {
-        $tasks.slideUp(200);
-        $chevron.removeClass('rotate-90');
-      }
-    });
-
     // Delete task button in roadmap
     $(document).on('click', '.btn-delete-task', function(e) {
       e.preventDefault();
@@ -1220,7 +1208,11 @@
     // Detect manual scroll in agent output
     $('#conversation-container').on('scroll', function() {
       var $container = $(this);
-      var isNearBottom = $container[0].scrollHeight - $container.scrollTop() - $container.outerHeight() < 50;
+      var scrollTop = $container.scrollTop();
+      var scrollHeight = $container[0].scrollHeight;
+      var containerHeight = $container.outerHeight();
+      var isNearBottom = scrollHeight - scrollTop - containerHeight < 50;
+      var isNearTop = scrollTop < 50;
 
       if (!isNearBottom && !state.agentOutputScrollLock) {
         // User scrolled up - pause auto-scroll
@@ -1231,6 +1223,19 @@
         state.agentOutputScrollLock = false;
         updateScrollLockButton();
       }
+
+      // Update floating scroll buttons visibility
+      updateScrollFloatButtons($container, scrollTop, scrollHeight, containerHeight, isNearTop, isNearBottom);
+    });
+
+    // Floating scroll button click handlers
+    $('#btn-scroll-top').on('click', function() {
+      $('#conversation-container').animate({ scrollTop: 0 }, 200);
+    });
+
+    $('#btn-scroll-bottom').on('click', function() {
+      var $container = $('#conversation-container');
+      $container.animate({ scrollTop: $container[0].scrollHeight }, 200);
     });
 
     $(document).on('keydown', function(e) {
@@ -1263,6 +1268,11 @@
         $('#input-claude-md-max-size').val(settings.claudeMdMaxSizeKB || 50);
         $('#input-desktop-notifications').prop('checked', settings.enableDesktopNotifications || false);
         updatePermissionFieldsState();
+
+        // Store settings for templates module
+        state.settings = settings;
+        PromptTemplatesModule.renderSettingsTab();
+
         openModal('modal-settings');
       })
       .fail(function(xhr) {
@@ -1644,6 +1654,30 @@
     }
   }
 
+  function updateScrollFloatButtons($container, scrollTop, scrollHeight, containerHeight, isNearTop, isNearBottom) {
+    var $btnTop = $('#btn-scroll-top');
+    var $btnBottom = $('#btn-scroll-bottom');
+    var hasScrollableContent = scrollHeight > containerHeight + 100;
+
+    if (!hasScrollableContent) {
+      $btnTop.addClass('hidden');
+      $btnBottom.addClass('hidden');
+      return;
+    }
+
+    if (isNearTop) {
+      $btnTop.addClass('hidden');
+    } else {
+      $btnTop.removeClass('hidden');
+    }
+
+    if (isNearBottom) {
+      $btnBottom.addClass('hidden');
+    } else {
+      $btnBottom.removeClass('hidden');
+    }
+  }
+
   function updateFontSize() {
     var size = state.fontSize + 'px';
 
@@ -1722,6 +1756,15 @@
     // Claude Files button
     $('#btn-claude-files').on('click', function() {
       ModalsModule.openClaudeFilesModal();
+    });
+
+    // Search button
+    $('#btn-search').on('click', function() {
+      if (state.search.isOpen) {
+        SearchModule.close();
+      } else {
+        SearchModule.open();
+      }
     });
 
     // Optimization action buttons (dynamically created, so use delegation)
@@ -1827,28 +1870,6 @@
     // Save Claude file button
     $('#btn-save-claude-file').on('click', function() {
       saveClaudeFile();
-    });
-
-    // Claude file editor change detection
-    $('#claude-file-editor').on('input', function() {
-      var currentFile = state.claudeFilesState && state.claudeFilesState.currentFile;
-
-      if (currentFile) {
-        var hasChanges = $(this).val() !== currentFile.originalContent;
-        $('#btn-save-claude-file').toggleClass('hidden', !hasChanges);
-        updateClaudeFilePreview();
-      }
-    });
-
-    // Claude file preview toggle
-    $('#btn-toggle-claude-preview').on('click', function() {
-      toggleClaudeFilePreview();
-    });
-
-    // Claude file list click handler
-    $(document).on('click', '.claude-file-item', function() {
-      var filePath = $(this).data('path');
-      selectClaudeFile(filePath);
     });
 
     // Rename conversation button click
@@ -2171,15 +2192,18 @@
     var isBlocked = promptType !== null;
 
     // Disable input and send button when prompt is active
-    $('#agent-input').prop('disabled', isBlocked);
-    $('#send-agent-input').prop('disabled', isBlocked);
+    $('#input-message').prop('disabled', isBlocked);
+    $('#btn-send-message').prop('disabled', isBlocked);
 
     if (isBlocked) {
-      $('#agent-input').attr('placeholder', 'Please respond to the prompt above...');
-      $('#form-send-agent').addClass('opacity-50');
+      var placeholder = promptType === 'compacting'
+        ? 'Compacting context, please wait...'
+        : 'Please respond to the prompt above...';
+      $('#input-message').attr('placeholder', placeholder);
+      $('#form-send-message').addClass('opacity-50');
     } else {
-      $('#agent-input').attr('placeholder', 'Type your message...');
-      $('#form-send-agent').removeClass('opacity-50');
+      $('#input-message').attr('placeholder', 'Type a message to Claude...');
+      $('#form-send-message').removeClass('opacity-50');
     }
   }
 
@@ -2261,41 +2285,12 @@
     }
   }
 
-  // Claude Code slash commands that don't work through the API
-  var UNSUPPORTED_SLASH_COMMANDS = [
-    '/context-usage', '/context', '/compact', '/clear', '/config', '/cost',
-    '/doctor', '/help', '/init', '/login', '/logout', '/memory', '/model',
-    '/permissions', '/pr-comments', '/review', '/status', '/terminal-setup',
-    '/vim', '/bug', '/listen', '/user:*', '/project:*', '/add-dir', '/mcp',
-    '/plan', '/release-notes', '/allowed-tools', '/install-github-app', '/ide'
-  ];
-
-  function isUnsupportedSlashCommand(message) {
-    if (!message.startsWith('/')) return false;
-
-    var cmd = message.split(/\s/)[0].toLowerCase();
-
-    return UNSUPPORTED_SLASH_COMMANDS.some(function(pattern) {
-      if (pattern.endsWith(':*')) {
-        return cmd.startsWith(pattern.slice(0, -1));
-      }
-
-      return cmd === pattern;
-    });
-  }
-
   function sendMessage() {
     var $input = $('#input-message');
     var message = $input.val().trim();
     var hasImages = state.pendingImages.length > 0;
 
     if (!message && !hasImages) return;
-
-    // Check for unsupported Claude Code slash commands
-    if (isUnsupportedSlashCommand(message)) {
-      showSlashCommandWarning(message.split(/\s/)[0]);
-      return;
-    }
 
     // All messages (including slash commands) are sent to Claude agent
     if (state.messageSending || state.agentStarting) return;
@@ -2584,6 +2579,10 @@
     var previousId = state.selectedProjectId;
 
     if (previousId && previousId !== projectId) {
+      // Save current input text for the previous project
+      var currentInput = $('#input-message').val() || '';
+      state.projectInputs[previousId] = currentInput;
+
       unsubscribeFromProject(previousId);
       stopAgentStatusPolling(); // Stop polling for previous project
       FileCache.clear(); // Clear read file cache when switching projects
@@ -2604,6 +2603,10 @@
     }
 
     state.selectedProjectId = projectId;
+
+    // Restore input text for the new project
+    var savedInput = state.projectInputs[projectId] || '';
+    $('#input-message').val(savedInput).trigger('input');
     state.currentAgentMode = null; // Reset on project change
     state.pendingPermissionMode = null; // Clear pending mode on project change
     setPromptBlockingState(null); // Clear any prompt blocking on project change
@@ -2657,11 +2660,18 @@
         // Update isWaitingForInput on the project (only if server version is newer)
         if (project && typeof data.isWaitingForInput === 'boolean') {
           var serverVersion = data.waitingVersion || 0;
+          var projectVersion = project.waitingVersion || 0;
 
-          if (serverVersion > state.waitingVersion) {
-            state.waitingVersion = serverVersion;
+          // When subscribing to a project, always accept the server state if version is different
+          if (serverVersion > projectVersion || serverVersion === 0) {
+            project.waitingVersion = serverVersion;
             project.isWaitingForInput = data.isWaitingForInput;
             updateWaitingIndicator(data.isWaitingForInput);
+
+            // Update global state
+            if (serverVersion > state.waitingVersion) {
+              state.waitingVersion = serverVersion;
+            }
           }
         }
 
@@ -3009,11 +3019,17 @@
         // Update isWaitingForInput from polling response (only if server version is newer)
         if (project && typeof response.isWaitingForInput === 'boolean') {
           var serverVersion = response.waitingVersion || 0;
+          var projectVersion = project.waitingVersion || 0;
 
-          if (serverVersion > state.waitingVersion) {
-            state.waitingVersion = serverVersion;
+          if (serverVersion > projectVersion) {
+            project.waitingVersion = serverVersion;
             var wasWaiting = project.isWaitingForInput;
             project.isWaitingForInput = response.isWaitingForInput;
+
+            // Update global state for selected project
+            if (state.selectedProjectId === projectId && serverVersion > state.waitingVersion) {
+              state.waitingVersion = serverVersion;
+            }
 
             // If waiting state changed, update UI and apply pending mode changes
             if (wasWaiting !== response.isWaitingForInput) {
@@ -3321,19 +3337,22 @@
     // data is now { isWaiting, version }
     var isWaiting = data.isWaiting;
     var serverVersion = data.version || 0;
+    var projectVersion = (project && project.waitingVersion) || 0;
 
-    // Skip update if server version is not newer than our local version
-    if (serverVersion <= state.waitingVersion) {
+    // Skip update if server version is not newer than this project's version
+    if (serverVersion <= projectVersion) {
       return;
     }
 
-    state.waitingVersion = serverVersion;
-
+    // Update project-level version tracking
     if (project) {
+      project.waitingVersion = serverVersion;
       project.isWaitingForInput = isWaiting;
       renderProjectList();
 
       if (state.selectedProjectId === projectId) {
+        // Also update global state for selected project
+        state.waitingVersion = serverVersion;
         updateWaitingIndicator(isWaiting);
         updateCancelButton();
 
@@ -3415,6 +3434,28 @@
     updateProjectStatusById(projectId, status);
     updateAgentOutputHeader(projectId, status);
 
+    // Sync waiting state for ALL projects (not just selected)
+    // This ensures sidebar indicators update correctly
+    if (fullStatus && status === 'running') {
+      var serverVersion = fullStatus.waitingVersion || 0;
+      var project = findProjectById(projectId);
+      var projectVersion = (project && project.waitingVersion) || 0;
+
+      // Update if server version is newer than this project's tracked version
+      if (serverVersion > projectVersion || serverVersion === 0) {
+        if (project) {
+          var waitingChanged = project.isWaitingForInput !== fullStatus.isWaitingForInput;
+          project.isWaitingForInput = fullStatus.isWaitingForInput;
+          project.waitingVersion = serverVersion;
+
+          // Re-render sidebar if waiting state changed
+          if (waitingChanged) {
+            renderProjectList();
+          }
+        }
+      }
+    }
+
     // Update running indicator for selected project
     if (projectId === state.selectedProjectId) {
       showAgentRunningIndicator(status === 'running');
@@ -3437,21 +3478,13 @@
         state.currentSessionId = fullStatus.sessionId;
       }
 
-      // Sync waiting state if provided (only when agent is running)
-      // Only update if server version is newer to avoid stale updates
+      // Update waiting indicator in main panel
       if (fullStatus && status === 'running') {
         var serverVersion = fullStatus.waitingVersion || 0;
 
-        if (serverVersion > state.waitingVersion) {
-          state.waitingVersion = serverVersion;
+        if (serverVersion > state.waitingVersion || serverVersion === 0) {
           updateWaitingIndicator(fullStatus.isWaitingForInput);
-
-          var project = findProjectById(projectId);
-
-          if (project) {
-            project.isWaitingForInput = fullStatus.isWaitingForInput;
-            project.waitingVersion = fullStatus.waitingVersion;
-          }
+          state.waitingVersion = serverVersion;
         }
       }
     }
@@ -3763,7 +3796,9 @@
       showErrorToast: showErrorToast,
       openModal: openModal,
       Formatters: Formatters,
-      FileBrowser: FileBrowser
+      FileBrowser: FileBrowser,
+      marked: window.marked,
+      hljs: window.hljs
     });
 
     ConversationHistoryModule.init({
@@ -3827,6 +3862,24 @@
       showToast: showToast
     });
 
+    PromptTemplatesModule.init({
+      state: state,
+      escapeHtml: escapeHtml,
+      showToast: showToast,
+      openModal: openModal,
+      closeAllModals: closeAllModals
+    });
+
+    ClaudeCommandsModule.init({
+      escapeHtml: escapeHtml,
+      openModal: openModal,
+      closeAllModals: closeAllModals,
+      sendCommand: function(command) {
+        $('#input-message').val(command);
+        sendMessage();
+      }
+    });
+
     ToolRenderer.init({
       escapeHtml: escapeHtml,
       truncateString: truncateString,
@@ -3865,6 +3918,7 @@
     loadAppVersion();
     connectWebSocket();
     setupResizeHandler();
+    setupVisibilityHandler();
   }
 
   // Handle window resize for mobile/desktop hint updates
@@ -3876,6 +3930,22 @@
       resizeTimeout = setTimeout(function() {
         updateInputHint();
       }, 250);
+    });
+  }
+
+  // Handle page visibility changes (mobile tab switching, app backgrounding)
+  function setupVisibilityHandler() {
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible') {
+        // Page became visible - verify WebSocket and reconnect if needed
+        if (!state.websocket || state.websocket.readyState !== WebSocket.OPEN) {
+          console.log('Page visible, WebSocket not connected - reconnecting...');
+          connectWebSocket();
+        } else if (state.selectedProjectId) {
+          // Re-subscribe to current project in case subscription was lost
+          subscribeToProject(state.selectedProjectId);
+        }
+      }
     });
   }
 

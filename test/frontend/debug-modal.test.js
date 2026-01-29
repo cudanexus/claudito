@@ -31,6 +31,7 @@ describe('DebugModal', () => {
 
     const $ = jest.fn().mockReturnValue(mockElement);
     $.fn = {};
+
     return $;
   }
 
@@ -51,14 +52,29 @@ describe('DebugModal', () => {
       }
     };
 
+    // Create chainable mock promises that call done callback immediately
     mockApi = {
-      getDebugInfo: jest.fn().mockReturnValue({
+      getDebugInfo: jest.fn().mockImplementation(() => ({
         done: jest.fn().mockImplementation(function(cb) {
-          this._doneCb = cb;
+          cb({
+            processInfo: null,
+            loopState: null,
+            lastCommand: null,
+            recentLogs: [],
+            trackedProcesses: [],
+            memoryUsage: null
+          });
           return this;
         }),
         fail: jest.fn().mockReturnThis()
-      })
+      })),
+      getGlobalLogs: jest.fn().mockImplementation(() => ({
+        done: jest.fn().mockImplementation(function(cb) {
+          cb({ logs: [] });
+          return this;
+        }),
+        fail: jest.fn().mockReturnThis()
+      }))
     };
 
     mockEscapeHtml = jest.fn((str) => str);
@@ -118,16 +134,17 @@ describe('DebugModal', () => {
       expect(mockApi.getDebugInfo).toHaveBeenCalledWith('project-123', 100);
     });
 
-    it('should start auto-refresh interval', () => {
+    it('should NOT start auto-refresh (auto-refresh is disabled)', () => {
       DebugModal.open();
 
       // First call is immediate from refresh()
       expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(1);
 
-      // Advance timer by 2 seconds
+      // Advance timer by 2 seconds - should NOT trigger another call
       jest.advanceTimersByTime(2000);
 
-      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(2);
+      // Should still be 1 call - no auto-refresh
+      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -148,27 +165,29 @@ describe('DebugModal', () => {
       expect(mockState.debugExpandedLogs).toEqual({});
     });
 
-    it('should stop auto-refresh interval', () => {
+    it('should handle close gracefully (no auto-refresh to stop)', () => {
       DebugModal.open();
-      jest.advanceTimersByTime(2000);
-      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(2);
+      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(1);
 
       DebugModal.close();
       jest.advanceTimersByTime(4000);
 
-      // Should not have any more calls after close
-      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(2);
+      // Should still be 1 call - no auto-refresh was running
+      expect(mockApi.getDebugInfo).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('refresh', () => {
-    it('should not fetch if no project selected', () => {
+    it('should still fetch global logs even if no project selected', () => {
       mockState.selectedProjectId = null;
       mockState.debugPanelOpen = true;
 
       DebugModal.refresh();
 
+      // Should NOT fetch project-specific debug info
       expect(mockApi.getDebugInfo).not.toHaveBeenCalled();
+      // Should still fetch global logs
+      expect(mockApi.getGlobalLogs).toHaveBeenCalledWith(200);
     });
 
     it('should not fetch if debug panel is closed', () => {
@@ -177,26 +196,29 @@ describe('DebugModal', () => {
       DebugModal.refresh();
 
       expect(mockApi.getDebugInfo).not.toHaveBeenCalled();
+      expect(mockApi.getGlobalLogs).not.toHaveBeenCalled();
     });
 
-    it('should fetch debug info when panel is open and project selected', () => {
+    it('should fetch both debug info and global logs when panel is open and project selected', () => {
       mockState.debugPanelOpen = true;
 
       DebugModal.refresh();
 
       expect(mockApi.getDebugInfo).toHaveBeenCalledWith('project-123', 100);
+      expect(mockApi.getGlobalLogs).toHaveBeenCalledWith(200);
     });
 
     it('should show error on API failure', () => {
       mockState.debugPanelOpen = true;
-      const failCb = jest.fn();
-      mockApi.getDebugInfo.mockReturnValue({
+
+      // Mock getGlobalLogs to fail
+      mockApi.getGlobalLogs = jest.fn().mockImplementation(() => ({
         done: jest.fn().mockReturnThis(),
         fail: jest.fn().mockImplementation(function(cb) {
           cb();
           return this;
         })
-      });
+      }));
 
       DebugModal.refresh();
 
@@ -205,8 +227,10 @@ describe('DebugModal', () => {
   });
 
   describe('stopAutoRefresh', () => {
-    it('should clear interval if exists', () => {
-      DebugModal.open();
+    it('should clear interval if exists (legacy function - auto-refresh is disabled)', () => {
+      // Auto-refresh is disabled, but stopAutoRefresh should still work
+      // if interval was set by external code
+      mockState.debugRefreshInterval = setInterval(() => {}, 1000);
       expect(mockState.debugRefreshInterval).not.toBeNull();
 
       DebugModal.stopAutoRefresh();
@@ -347,15 +371,28 @@ describe('DebugModal', () => {
       ]
     };
 
-    it('should render all tabs when data is received', () => {
-      mockState.debugPanelOpen = true;
-      mockApi.getDebugInfo.mockReturnValue({
+    function setupMocksWithData(projectData) {
+      // Mock getGlobalLogs to return logs, then getDebugInfo to return project data
+      mockApi.getGlobalLogs = jest.fn().mockImplementation(() => ({
         done: jest.fn().mockImplementation(function(cb) {
-          cb(mockDebugData);
+          cb({ logs: mockDebugData.recentLogs || [] });
           return this;
         }),
         fail: jest.fn().mockReturnThis()
-      });
+      }));
+
+      mockApi.getDebugInfo = jest.fn().mockImplementation(() => ({
+        done: jest.fn().mockImplementation(function(cb) {
+          cb(projectData);
+          return this;
+        }),
+        fail: jest.fn().mockReturnThis()
+      }));
+    }
+
+    it('should render all tabs when data is received', () => {
+      mockState.debugPanelOpen = true;
+      setupMocksWithData(mockDebugData);
 
       DebugModal.refresh();
 
@@ -369,13 +406,7 @@ describe('DebugModal', () => {
 
     it('should escape HTML in rendered content', () => {
       mockState.debugPanelOpen = true;
-      mockApi.getDebugInfo.mockReturnValue({
-        done: jest.fn().mockImplementation(function(cb) {
-          cb(mockDebugData);
-          return this;
-        }),
-        fail: jest.fn().mockReturnThis()
-      });
+      setupMocksWithData(mockDebugData);
 
       DebugModal.refresh();
 
@@ -385,13 +416,7 @@ describe('DebugModal', () => {
 
     it('should format dates using formatDateTime', () => {
       mockState.debugPanelOpen = true;
-      mockApi.getDebugInfo.mockReturnValue({
-        done: jest.fn().mockImplementation(function(cb) {
-          cb(mockDebugData);
-          return this;
-        }),
-        fail: jest.fn().mockReturnThis()
-      });
+      setupMocksWithData(mockDebugData);
 
       DebugModal.refresh();
 
@@ -400,13 +425,7 @@ describe('DebugModal', () => {
 
     it('should format log times using formatLogTime', () => {
       mockState.debugPanelOpen = true;
-      mockApi.getDebugInfo.mockReturnValue({
-        done: jest.fn().mockImplementation(function(cb) {
-          cb(mockDebugData);
-          return this;
-        }),
-        fail: jest.fn().mockReturnThis()
-      });
+      setupMocksWithData(mockDebugData);
 
       DebugModal.refresh();
 
@@ -415,13 +434,7 @@ describe('DebugModal', () => {
 
     it('should format bytes using formatBytes', () => {
       mockState.debugPanelOpen = true;
-      mockApi.getDebugInfo.mockReturnValue({
-        done: jest.fn().mockImplementation(function(cb) {
-          cb(mockDebugData);
-          return this;
-        }),
-        fail: jest.fn().mockReturnThis()
-      });
+      setupMocksWithData(mockDebugData);
 
       DebugModal.refresh();
 

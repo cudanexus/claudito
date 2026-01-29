@@ -17,7 +17,7 @@ import {
 import { createGitService } from '../services/git-service';
 import { createShellService, ShellService } from '../services/shell-service';
 import { DefaultAgentManager, AgentManager } from '../agents';
-import { getDataDirectory, getLogger } from '../utils';
+import { getDataDirectory, getLogger, getGlobalLogs } from '../utils';
 import { RoadmapGenerator } from '../services';
 import packageJson from '../../package.json';
 
@@ -127,6 +127,13 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
   router.get('/agents/status', (_req, res) => {
     const resourceStatus = agentManager.getResourceStatus();
     res.json(resourceStatus);
+  });
+
+  // Global logs endpoint (for debug modal)
+  router.get('/logs', (req, res) => {
+    const limit = req.query['limit'] ? parseInt(req.query['limit'] as string, 10) : 100;
+    const logs = getGlobalLogs(limit);
+    res.json({ logs });
   });
 
   // Filesystem routes

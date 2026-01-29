@@ -55,6 +55,16 @@
     return $.get(baseUrl + '/api/agents/status');
   };
 
+  ApiClient.getGlobalLogs = function(limit) {
+    var url = baseUrl + '/api/logs';
+
+    if (limit) {
+      url += '?limit=' + limit;
+    }
+
+    return $.get(url);
+  };
+
   // ============================================================
   // Projects
   // ============================================================

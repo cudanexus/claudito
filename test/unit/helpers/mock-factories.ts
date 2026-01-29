@@ -70,6 +70,7 @@ export const DEFAULT_TEST_SETTINGS: GlobalSettings = {
     includePartialMessages: false,
     noSessionPersistence: false,
   },
+  promptTemplates: [],
 };
 
 export const DEFAULT_CLAUDE_PERMISSIONS: ClaudePermissions = {

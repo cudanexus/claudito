@@ -37,8 +37,7 @@
   function closeSearch() {
     state.search.isOpen = false;
     $('#search-controls').addClass('hidden');
-    $('#search-advanced-filters').addClass('hidden');
-    $('#btn-search-advanced').removeClass('bg-purple-600').addClass('bg-gray-700');
+    $('#modal-search').addClass('hidden');
     $('#search-input').val('');
     clearSearchHighlights();
     clearHistorySearchResults();
@@ -48,6 +47,14 @@
     state.search.currentIndex = -1;
     state.search.historyResults = [];
     updateSearchCounter();
+  }
+
+  function openSearchModal() {
+    $('#modal-search').removeClass('hidden');
+  }
+
+  function closeSearchModal() {
+    $('#modal-search').addClass('hidden');
   }
 
   function performSearch(query) {
@@ -66,7 +73,22 @@
     }
 
     var $conversation = $('#conversation');
-    var searchRegex = new RegExp(escapeRegExp(query), 'gi');
+
+    // Build regex based on options
+    var flags = state.search.options.caseSensitive ? 'g' : 'gi';
+    var searchRegex;
+
+    try {
+      if (state.search.options.regex) {
+        searchRegex = new RegExp(query, flags);
+      } else {
+        searchRegex = new RegExp(escapeRegExp(query), flags);
+      }
+    } catch (e) {
+      // Invalid regex - show error in counter
+      $('#search-counter').text('Invalid regex');
+      return;
+    }
 
     // Find all text nodes within visible conversation messages
     $conversation.find('.conversation-message').each(function() {
@@ -286,9 +308,15 @@
       system: true
     };
     state.search.searchHistory = false;
+    state.search.options = {
+      regex: false,
+      caseSensitive: false
+    };
 
-    $('#filter-user, #filter-assistant, #filter-tool, #filter-system').prop('checked', true);
-    $('#filter-history').prop('checked', false);
+    // Update modal checkboxes
+    $('#search-filter-user, #search-filter-assistant, #search-filter-tool, #search-filter-system').prop('checked', true);
+    $('#search-filter-history').prop('checked', false);
+    $('#search-opt-regex, #search-opt-case').prop('checked', false);
     $('#conversation').find('.conversation-message').removeClass('filter-hidden');
   }
 
@@ -388,23 +416,14 @@
       goToNextMatch();
     });
 
-    // Advanced filters toggle
+    // Advanced filters - open modal
     $('#btn-search-advanced').on('click', function() {
-      var $btn = $(this);
-      var $filters = $('#search-advanced-filters');
-
-      if ($filters.hasClass('hidden')) {
-        $filters.removeClass('hidden');
-        $btn.removeClass('bg-gray-700').addClass('bg-purple-600');
-      } else {
-        $filters.addClass('hidden');
-        $btn.addClass('bg-gray-700').removeClass('bg-purple-600');
-      }
+      openSearchModal();
     });
 
-    // Message type filter checkboxes
-    $('#filter-user, #filter-assistant, #filter-tool, #filter-system').on('change', function() {
-      var filterType = $(this).attr('id').replace('filter-', '');
+    // Message type filter checkboxes (in modal)
+    $('#search-filter-user, #search-filter-assistant, #search-filter-tool, #search-filter-system').on('change', function() {
+      var filterType = $(this).attr('id').replace('search-filter-', '');
       state.search.filters[filterType] = $(this).is(':checked');
       applyMessageTypeFilters();
 
@@ -414,9 +433,28 @@
       }
     });
 
-    // History search checkbox
-    $('#filter-history').on('change', function() {
+    // History search checkbox (in modal)
+    $('#search-filter-history').on('change', function() {
       state.search.searchHistory = $(this).is(':checked');
+
+      // Re-run search with current query
+      if (state.search.query) {
+        performSearch(state.search.query);
+      }
+    });
+
+    // Search options checkboxes (in modal)
+    $('#search-opt-regex').on('change', function() {
+      state.search.options.regex = $(this).is(':checked');
+
+      // Re-run search with current query
+      if (state.search.query) {
+        performSearch(state.search.query);
+      }
+    });
+
+    $('#search-opt-case').on('change', function() {
+      state.search.options.caseSensitive = $(this).is(':checked');
 
       // Re-run search with current query
       if (state.search.query) {
@@ -464,6 +502,8 @@
     init: init,
     open: openSearch,
     close: closeSearch,
+    openModal: openSearchModal,
+    closeModal: closeSearchModal,
     performSearch: performSearch,
     goToNextMatch: goToNextMatch,
     goToPrevMatch: goToPrevMatch,

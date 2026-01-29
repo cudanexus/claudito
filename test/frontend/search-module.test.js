@@ -64,7 +64,11 @@ describe('SearchModule', () => {
           tool: true,
           system: true
         },
-        searchHistory: false
+        searchHistory: false,
+        options: {
+          regex: false,
+          caseSensitive: false
+        }
       },
       selectedProjectId: 'test-project-id',
       activeTab: 'agent-output',
@@ -161,11 +165,11 @@ describe('SearchModule', () => {
       expect(mockState.search.historyResults).toEqual([]);
     });
 
-    it('should hide advanced filters', () => {
+    it('should hide search modal', () => {
       const mockElement = global.$();
       SearchModule.close();
 
-      expect(global.$).toHaveBeenCalledWith('#search-advanced-filters');
+      expect(global.$).toHaveBeenCalledWith('#modal-search');
       expect(mockElement.addClass).toHaveBeenCalledWith('hidden');
     });
   });
@@ -431,8 +435,20 @@ describe('SearchModule', () => {
 
       SearchModule.resetMessageTypeFilters();
 
-      expect(global.$).toHaveBeenCalledWith('#filter-user, #filter-assistant, #filter-tool, #filter-system');
+      expect(global.$).toHaveBeenCalledWith('#search-filter-user, #search-filter-assistant, #search-filter-tool, #search-filter-system');
       expect(mockProp).toHaveBeenCalledWith('checked', true);
+    });
+
+    it('should reset search options', () => {
+      mockState.search.options = {
+        regex: true,
+        caseSensitive: true
+      };
+
+      SearchModule.resetMessageTypeFilters();
+
+      expect(mockState.search.options.regex).toBe(false);
+      expect(mockState.search.options.caseSensitive).toBe(false);
     });
   });
 

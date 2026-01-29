@@ -101,7 +101,9 @@ describe('ModalsModule', () => {
       showErrorToast: mockShowErrorToast,
       openModal: mockOpenModal,
       Formatters: mockFormatters,
-      FileBrowser: mockFileBrowser
+      FileBrowser: mockFileBrowser,
+      marked: global.marked,
+      hljs: global.hljs
     });
   });
 
@@ -545,6 +547,165 @@ describe('ModalsModule', () => {
 
       expect(mockEscapeHtml).toHaveBeenCalledWith('<script>alert(1)</script>');
       expect(mockEscapeHtml).toHaveBeenCalledWith('<img onerror=alert(1)>');
+    });
+  });
+
+  describe('Claude Files Preview', () => {
+    it('should export updateClaudeFilePreview function', () => {
+      expect(typeof ModalsModule.updateClaudeFilePreview).toBe('function');
+    });
+
+    it('should export toggleClaudeFilePreview function', () => {
+      expect(typeof ModalsModule.toggleClaudeFilePreview).toBe('function');
+    });
+
+    describe('toggleClaudeFilePreview', () => {
+      it('should toggle from edit mode to preview mode', () => {
+        const mockEditorPane = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis(),
+          hasClass: jest.fn().mockReturnValue(false)
+        };
+        const mockPreviewPane = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis(),
+          hasClass: jest.fn().mockReturnValue(true)
+        };
+        const mockBtn = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis()
+        };
+        const mockBtnText = { text: jest.fn() };
+        const mockIcon = { html: jest.fn() };
+        const mockPreview = { html: jest.fn(), find: jest.fn().mockReturnValue({ each: jest.fn() }) };
+        const mockEditor = { val: jest.fn().mockReturnValue('# Test') };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-editor-pane') return mockEditorPane;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          if (selector === '#btn-toggle-claude-preview') return mockBtn;
+          if (selector === '#claude-preview-btn-text') return mockBtnText;
+          if (selector === '#claude-preview-icon') return mockIcon;
+          if (selector === '#claude-file-preview') return mockPreview;
+          if (selector === '#claude-file-editor') return mockEditor;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.toggleClaudeFilePreview();
+
+        expect(mockPreviewPane.removeClass).toHaveBeenCalledWith('hidden');
+        expect(mockEditorPane.addClass).toHaveBeenCalledWith('hidden');
+        expect(mockBtnText.text).toHaveBeenCalledWith('Edit');
+      });
+
+      it('should toggle from preview mode to edit mode', () => {
+        const mockEditorPane = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis()
+        };
+        const mockPreviewPane = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis(),
+          hasClass: jest.fn().mockReturnValue(false)
+        };
+        const mockBtn = {
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis()
+        };
+        const mockBtnText = { text: jest.fn() };
+        const mockIcon = { html: jest.fn() };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-editor-pane') return mockEditorPane;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          if (selector === '#btn-toggle-claude-preview') return mockBtn;
+          if (selector === '#claude-preview-btn-text') return mockBtnText;
+          if (selector === '#claude-preview-icon') return mockIcon;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.toggleClaudeFilePreview();
+
+        expect(mockPreviewPane.addClass).toHaveBeenCalledWith('hidden');
+        expect(mockEditorPane.removeClass).toHaveBeenCalledWith('hidden');
+        expect(mockBtnText.text).toHaveBeenCalledWith('Preview');
+      });
+    });
+
+    describe('updateClaudeFilePreview', () => {
+      it('should render markdown when preview pane is visible', () => {
+        const mockPreview = { html: jest.fn(), find: jest.fn().mockReturnValue({ each: jest.fn() }) };
+        const mockPreviewPane = { hasClass: jest.fn().mockReturnValue(false) };
+        const mockEditor = { val: jest.fn().mockReturnValue('# Test Header') };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-file-preview') return mockPreview;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          if (selector === '#claude-file-editor') return mockEditor;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.updateClaudeFilePreview();
+
+        expect(global.marked.parse).toHaveBeenCalledWith('# Test Header');
+        expect(mockPreview.html).toHaveBeenCalledWith('<p># Test Header</p>');
+      });
+
+      it('should not render when preview pane is hidden', () => {
+        const mockPreview = { html: jest.fn() };
+        const mockPreviewPane = { hasClass: jest.fn().mockReturnValue(true) };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-file-preview') return mockPreview;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.updateClaudeFilePreview();
+
+        expect(global.marked.parse).not.toHaveBeenCalled();
+        expect(mockPreview.html).not.toHaveBeenCalled();
+      });
+
+      it('should show no content message when editor is empty', () => {
+        const mockPreview = { html: jest.fn() };
+        const mockPreviewPane = { hasClass: jest.fn().mockReturnValue(false) };
+        const mockEditor = { val: jest.fn().mockReturnValue('') };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-file-preview') return mockPreview;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          if (selector === '#claude-file-editor') return mockEditor;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.updateClaudeFilePreview();
+
+        expect(mockPreview.html).toHaveBeenCalledWith('<p class="text-gray-500">No content to preview</p>');
+      });
+
+      it('should apply syntax highlighting to code blocks', () => {
+        const mockCodeBlocks = [];
+        const mockPreview = {
+          html: jest.fn(),
+          find: jest.fn().mockReturnValue({
+            each: jest.fn((cb) => mockCodeBlocks.forEach((el, i) => cb.call(el, i, el)))
+          })
+        };
+        const mockPreviewPane = { hasClass: jest.fn().mockReturnValue(false) };
+        const mockEditor = { val: jest.fn().mockReturnValue('```js\ncode\n```') };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#claude-file-preview') return mockPreview;
+          if (selector === '#claude-preview-pane') return mockPreviewPane;
+          if (selector === '#claude-file-editor') return mockEditor;
+          return { hasClass: jest.fn().mockReturnValue(false) };
+        });
+
+        ModalsModule.updateClaudeFilePreview();
+
+        expect(mockPreview.find).toHaveBeenCalledWith('pre code');
+      });
     });
   });
 });

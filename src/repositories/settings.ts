@@ -54,6 +54,104 @@ export interface AgentStreamingSettings {
   noSessionPersistence: boolean;
 }
 
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
+export const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [
+  {
+    id: 'bug-fix',
+    name: 'Bug Fix',
+    description: 'Report and fix a bug',
+    content: `Fix this bug:
+
+**Location:** \${text:location}
+
+**Error message or symptom:**
+\${textarea:error}
+
+**Expected behavior:**
+\${textarea:expected}
+
+**Actual behavior:**
+\${textarea:actual}
+
+**Steps to reproduce:**
+\${textarea:steps}
+
+**Write regression test:** \${checkbox:write_test=true}`,
+  },
+  {
+    id: 'documentation',
+    name: 'Documentation',
+    description: 'Write or update documentation',
+    content: `Write documentation:
+
+**Target:** \${text:target}
+
+**Type:** \${select:type:README,API reference,inline comments,usage guide,architecture overview=README}
+
+**Audience:** \${select:audience:developers,end users,contributors,all=developers}
+
+**Areas to cover:**
+\${textarea:areas}`,
+  },
+  {
+    id: 'feature-implementation',
+    name: 'Feature Implementation',
+    description: 'Implement a new feature',
+    content: `Implement this feature:
+
+**Feature:** \${text:feature_name}
+
+**Use case:**
+\${textarea:use_case}
+
+**Requirements:**
+\${textarea:requirements}
+
+**Acceptance criteria:**
+\${textarea:criteria}
+
+**Include tests:** \${checkbox:include_tests=true}`,
+  },
+  {
+    id: 'refactoring',
+    name: 'Refactoring',
+    description: 'Refactor existing code',
+    content: `Refactor this code:
+
+**Target:** \${text:target}
+
+**Problems with current code:**
+\${textarea:problems}
+
+**Goal:** \${select:goal:improve readability,reduce complexity,improve performance,extract reusable code,improve testability=improve readability}
+
+**Constraints:**
+\${textarea:constraints}`,
+  },
+  {
+    id: 'testing',
+    name: 'Testing',
+    description: 'Write tests for code',
+    content: `Write tests:
+
+**Target:** \${text:target}
+
+**Test type:** \${select:type:unit tests,integration tests,end-to-end tests=unit tests}
+
+**Scenarios to cover:**
+\${textarea:scenarios}
+
+**Edge cases:**
+\${textarea:edge_cases}`,
+  },
+];
+
 export interface GlobalSettings {
   maxConcurrentAgents: number;
   claudePermissions: ClaudePermissions;
@@ -67,6 +165,8 @@ export interface GlobalSettings {
   agentLimits: AgentLimitsSettings;
   /** Agent streaming options */
   agentStreaming: AgentStreamingSettings;
+  /** Prompt templates for quick message insertion */
+  promptTemplates: PromptTemplate[];
 }
 
 const DEFAULT_SETTINGS: GlobalSettings = {
@@ -92,6 +192,7 @@ const DEFAULT_SETTINGS: GlobalSettings = {
     includePartialMessages: false,
     noSessionPersistence: false,
   },
+  promptTemplates: DEFAULT_PROMPT_TEMPLATES,
 };
 
 // Update type that allows partial nested objects for incremental updates
@@ -106,6 +207,7 @@ export interface SettingsUpdate {
   claudeMdMaxSizeKB?: number;
   agentLimits?: Partial<AgentLimitsSettings>;
   agentStreaming?: Partial<AgentStreamingSettings>;
+  promptTemplates?: PromptTemplate[];
 }
 
 export interface SettingsRepository {
@@ -187,6 +289,7 @@ export class FileSettingsRepository implements SettingsRepository {
         includePartialMessages: parsedStreaming?.includePartialMessages ?? DEFAULT_SETTINGS.agentStreaming.includePartialMessages,
         noSessionPersistence: parsedStreaming?.noSessionPersistence ?? DEFAULT_SETTINGS.agentStreaming.noSessionPersistence,
       },
+      promptTemplates: Array.isArray(parsed.promptTemplates) ? parsed.promptTemplates : DEFAULT_SETTINGS.promptTemplates,
     };
   }
 
@@ -252,6 +355,10 @@ export class FileSettingsRepository implements SettingsRepository {
         ...this.settings.agentStreaming,
         ...updates.agentStreaming,
       };
+    }
+
+    if (updates.promptTemplates !== undefined) {
+      this.settings.promptTemplates = updates.promptTemplates;
     }
 
     this.saveToFile();

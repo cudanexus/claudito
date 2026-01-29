@@ -232,6 +232,22 @@ Conversations use UUID v4 IDs that also serve as Claude session IDs:
 - `appendSystemPrompt` - Custom text appended to Claude's system prompt via `--append-system-prompt` flag. Changing this setting restarts all running agents.
 - `sendWithCtrlEnter` - Input keybinding preference (true=Ctrl+Enter sends, false=Enter sends)
 - `historyLimit` - Maximum conversations in history dropdown (5-100, default: 25)
+- `promptTemplates` - Reusable message templates with interpolation variables
+
+## Prompt Templates
+
+Templates allow creating reusable prompts with dynamic fields. Managed in Settings > Templates tab.
+
+**Variable syntax**: `${type:name}` or `${type:name:options}`
+
+- `${text:varname}` - Single-line text input
+- `${textarea:varname}` - Multi-line textarea
+- `${select:varname:opt1,opt2,opt3}` - Dropdown select
+- `${checkbox:varname}` - Boolean checkbox
+
+**Usage**: Click template button near input → select template → fill variables (if any) → insert into message
+
+**Default templates**: Code Review, Bug Fix Request, Feature Implementation, Refactoring Request, Documentation Request
 
 ## Claude Code Permissions
 

@@ -39,14 +39,24 @@ export interface PlanModeInfo {
   planContent?: string;
 }
 
+export interface ResultInfo {
+  isError: boolean;
+}
+
+export interface StatusChangeInfo {
+  status: 'compacting' | 'ready' | string;
+}
+
 export interface AgentMessage {
-  type: 'stdout' | 'stderr' | 'system' | 'tool_use' | 'tool_result' | 'user' | 'question' | 'permission' | 'plan_mode' | 'compaction';
+  type: 'stdout' | 'stderr' | 'system' | 'tool_use' | 'tool_result' | 'user' | 'question' | 'permission' | 'plan_mode' | 'compaction' | 'result' | 'status_change';
   content: string;
   timestamp: string;
   toolInfo?: ToolUseInfo;
   questionInfo?: QuestionInfo;
   permissionInfo?: PermissionRequest;
   planModeInfo?: PlanModeInfo;
+  resultInfo?: ResultInfo;
+  statusChangeInfo?: StatusChangeInfo;
 }
 
 export interface WaitingStatus {
@@ -174,6 +184,7 @@ interface StreamEvent {
   tool_use_id?: string;
   is_error?: boolean;
   errors?: string[];
+  result?: string;
   message?: {
     role?: string;
     content: ContentBlock[];
@@ -251,6 +262,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   private readonly _configuredSessionId: string | null = null;
   private readonly _isNewSession: boolean = true;
   private _sessionError: string | null = null;
+  private awaitingCompactionSummary = false;
+  private lastInputWasCommand = false;
 
   // Claude Code uses 200k token context by default
   private static readonly DEFAULT_MAX_CONTEXT_TOKENS = 200000;
@@ -463,6 +476,8 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     }
 
     this.isStopping = true;
+    this.awaitingCompactionSummary = false;
+    this.lastInputWasCommand = false;
     this.emitMessage('system', 'Stopping Claude agent...');
 
     // Remove stdout/stderr listeners to prevent buffered output from being emitted
@@ -600,6 +615,9 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     // Reset duplicate tracking when user sends input
     this.lastQuestionContent = null;
     this.lastPlanModeAction = null;
+
+    // Track if input is a command (starts with /)
+    this.lastInputWasCommand = input.trim().startsWith('/');
 
     this.setProcessing(true);
 
@@ -949,14 +967,24 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         this.emitToolResult('completed');
         break;
 
-      case 'result':
-        this.logger.info('STDOUT <<< Result', {
+      case 'result': {
+        const resultContent = event.result || '';
+
+        this.logger.info('STDOUT <<< Result event', {
           direction: 'output',
           eventType: 'result',
           subtype: event.subtype,
           isError: event.is_error,
           errors: event.errors,
+          lastInputWasCommand: this.lastInputWasCommand,
+          resultContent: resultContent,
         });
+
+        // Only emit result content for commands (like /compact, /help, etc.)
+        // Regular assistant responses are already streamed via content_block_delta
+        if (resultContent && this.lastInputWasCommand) {
+          this.emitResultMessage(resultContent, event.is_error || false);
+        }
 
         // Handle errors in result
         if (event.is_error && event.errors && event.errors.length > 0) {
@@ -964,8 +992,10 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         }
 
         this.setProcessing(false);
+        this.lastInputWasCommand = false;
         this.processNextQueuedInput();
         break;
+      }
 
       case 'system':
         if (event.subtype === 'init') {
@@ -979,6 +1009,27 @@ export class DefaultClaudeAgent implements ClaudeAgent {
             eventType: 'system',
             sessionId: event.session_id,
           });
+        } else if (event.subtype === 'status') {
+          // Status change event (e.g., compacting)
+          const status = (event as unknown as { status: string }).status;
+          this.logger.info('STDOUT <<< System status', {
+            direction: 'output',
+            eventType: 'system',
+            subtype: event.subtype,
+            status,
+          });
+          this.emitStatusChangeMessage(status);
+        } else if (event.subtype === 'compact_boundary') {
+          // Compaction boundary event - summary will follow in the next user message
+          const metadata = (event as unknown as { compact_metadata?: { trigger?: string; pre_tokens?: number } }).compact_metadata;
+          this.logger.info('STDOUT <<< Compaction boundary', {
+            direction: 'output',
+            eventType: 'system',
+            subtype: event.subtype,
+            sessionId: event.session_id,
+            compactMetadata: metadata,
+          });
+          this.awaitingCompactionSummary = true;
         } else if (event.subtype === 'compact' || event.subtype === 'summary') {
           // Context compaction/summarization event
           this.logger.info('STDOUT <<< Context compaction', {
@@ -1138,6 +1189,16 @@ export class DefaultClaudeAgent implements ClaudeAgent {
           block.is_error ? 'failed' : 'completed',
           typeof block.content === 'string' ? block.content : undefined
         );
+      } else if (block.type === 'text' && block.text && this.awaitingCompactionSummary) {
+        // This is the compaction summary following a compact_boundary event
+        this.logger.info('STDOUT <<< Compaction summary from user message', {
+          direction: 'output',
+          eventType: 'user',
+          summaryLength: block.text.length,
+          summaryPreview: block.text.substring(0, 200),
+        });
+        this.awaitingCompactionSummary = false;
+        this.emitCompactionMessage(block.text);
       }
     }
   }
@@ -1516,11 +1577,41 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.emitter.emit('message', message);
   }
 
+  private emitResultMessage(result: string, isError: boolean): void {
+    const message: AgentMessage = {
+      type: 'result',
+      content: result,
+      timestamp: new Date().toISOString(),
+      resultInfo: { isError },
+    };
+
+    this.logger.info('Emitting result message', {
+      resultLength: result.length,
+      isError,
+    });
+
+    this.emitter.emit('message', message);
+  }
+
+  private emitStatusChangeMessage(status: string): void {
+    const message: AgentMessage = {
+      type: 'status_change',
+      content: status === 'compacting' ? 'Compacting context...' : `Status: ${status}`,
+      timestamp: new Date().toISOString(),
+      statusChangeInfo: { status },
+    };
+
+    this.logger.info('Emitting status change message', { status });
+    this.emitter.emit('message', message);
+  }
+
   private handleExit(code: number | null): void {
     const wasStopping = this.isStopping;
     this.process = null;
     this._processInfo = null;
     this.isStopping = false;
+    this.awaitingCompactionSummary = false;
+    this.lastInputWasCommand = false;
 
     const finalStatus = wasStopping || code === 0 ? 'stopped' : 'error';
     this.logger.info('Claude process exited', {

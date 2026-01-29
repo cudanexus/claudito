@@ -6,6 +6,8 @@ import {
   getLogger,
   getProjectLogs,
   clearProjectLogs,
+  getGlobalLogs,
+  clearGlobalLogs,
 } from '../../../src/utils/logger';
 
 // Mock LogOutput for testing
@@ -444,6 +446,119 @@ describe('Logger', () => {
 
       // Since there's no projectId, nothing should be stored
       // (This is implicit - there's no projectId to look up)
+    });
+  });
+
+  describe('Global Log Store', () => {
+    beforeEach(() => {
+      clearGlobalLogs();
+    });
+
+    it('should store all logs in global buffer regardless of projectId', () => {
+      const mockOutput = createMockOutput();
+      const loggerWithProject = new DefaultLogger({ level: 'info', projectId: 'proj-1' }, mockOutput);
+      const loggerWithoutProject = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      loggerWithProject.info('Project message');
+      loggerWithoutProject.info('Global message');
+
+      const globalLogs = getGlobalLogs();
+      expect(globalLogs.length).toBeGreaterThanOrEqual(2);
+
+      const messages = globalLogs.map((l) => l.message);
+      expect(messages).toContain('Project message');
+      expect(messages).toContain('Global message');
+    });
+
+    it('should return logs without projectId in global buffer', () => {
+      const mockOutput = createMockOutput();
+      const logger = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      logger.info('No project message 1');
+      logger.info('No project message 2');
+
+      const globalLogs = getGlobalLogs();
+      const messages = globalLogs.map((l) => l.message);
+      expect(messages).toContain('No project message 1');
+      expect(messages).toContain('No project message 2');
+    });
+
+    it('should respect limit parameter for global logs', () => {
+      const mockOutput = createMockOutput();
+      const logger = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      for (let i = 0; i < 20; i++) {
+        logger.info(`Global message ${i}`);
+      }
+
+      const logs = getGlobalLogs(5);
+      expect(logs).toHaveLength(5);
+      expect(logs[0]?.message).toBe('Global message 15');
+      expect(logs[4]?.message).toBe('Global message 19');
+    });
+
+    it('should clear global logs', () => {
+      const mockOutput = createMockOutput();
+      const logger = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      logger.info('Message 1');
+      logger.info('Message 2');
+
+      const beforeClear = getGlobalLogs();
+      expect(beforeClear.length).toBeGreaterThan(0);
+
+      clearGlobalLogs();
+
+      const afterClear = getGlobalLogs();
+      expect(afterClear).toEqual([]);
+    });
+
+    it('should have larger capacity than project buffers', () => {
+      const mockOutput = createMockOutput();
+      const logger = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      // Write 150 entries - project buffer would be limited to 100
+      for (let i = 0; i < 150; i++) {
+        logger.info(`Message ${i}`);
+      }
+
+      const globalLogs = getGlobalLogs();
+      // Global buffer should have all 150 (capacity is 200)
+      expect(globalLogs.length).toBe(150);
+    });
+
+    it('should enforce global buffer limit', () => {
+      const mockOutput = createMockOutput();
+      const logger = new DefaultLogger({ level: 'info' }, mockOutput);
+
+      // Write 250 entries - global buffer is limited to 200
+      for (let i = 0; i < 250; i++) {
+        logger.info(`Message ${i}`);
+      }
+
+      const globalLogs = getGlobalLogs();
+      expect(globalLogs.length).toBeLessThanOrEqual(200);
+
+      // Should have most recent messages
+      const lastLog = globalLogs[globalLogs.length - 1];
+      expect(lastLog?.message).toBe('Message 249');
+    });
+
+    it('should include logs from multiple loggers with different names', () => {
+      const mockOutput = createMockOutput();
+      const logger1 = new DefaultLogger({ level: 'info', name: 'Logger1' }, mockOutput);
+      const logger2 = new DefaultLogger({ level: 'info', name: 'Logger2' }, mockOutput);
+      const logger3 = new DefaultLogger({ level: 'info', name: 'Logger3', projectId: 'proj' }, mockOutput);
+
+      logger1.info('From logger 1');
+      logger2.info('From logger 2');
+      logger3.info('From logger 3');
+
+      const globalLogs = getGlobalLogs();
+      const names = globalLogs.map((l) => l.name);
+      expect(names).toContain('Logger1');
+      expect(names).toContain('Logger2');
+      expect(names).toContain('Logger3');
     });
   });
 

@@ -1,241 +1,151 @@
 # Claudito Roadmap
 
-## Phase 1: Frontend Refactoring
+## Phase 1: Ralph Loop Implementation
 
-Extract testable modules from the monolithic app.js (9,738 lines) to improve maintainability and test coverage.
+Implement the Ralph Loop pattern based on Geoffrey Huntley's Ralph Wiggum technique - an iterative development pattern that solves context accumulation by starting each iteration with fresh context and using cross-model review.
 
-### Milestone 1.1: Pure Utilities (Completed)
+### Milestone 1.1: Ralph Loop Core Architecture
 
-- [x] Create public/js/modules/ directory
-- [x] Extract local-storage.js module (~50 lines, 40 tests)
-- [x] Extract diff-engine.js module (~570 lines, 72 tests)
-- [x] Extract api-client.js module (~335 lines, 68 tests)
-- [x] Update app.js to use new modules
-- [x] Update index.html script loading order
+- [ ] Design RalphLoop service interface with worker/reviewer model separation
+- [ ] Create iteration state persistence layer (summary files, feedback files)
+- [ ] Implement fresh context initialization for each iteration
+- [ ] Add iteration tracking with configurable max turns
+- [ ] Create RalphLoopConfig interface (maxTurns, workerModel, reviewerModel, taskDescription)
 
-### Milestone 1.2: State Layer
+### Milestone 1.2: Worker Agent Implementation
 
-- [ ] Extract state-manager.js module (~200 lines, ~30 tests)
-- [ ] Implement centralized state with pub/sub pattern
-- [ ] Migrate state reads in app.js to StateManager.get()
-- [ ] Migrate state writes in app.js to StateManager.set()
-- [ ] Verify app still works after migration
+- [ ] Create WorkerAgent class that reads previous iteration summaries
+- [ ] Implement task execution with summary generation after each iteration
+- [ ] Add structured output format for iteration results
+- [ ] Create file persistence for worker summaries (`.claudito/ralph/{taskId}/worker-summary.json`)
+- [ ] Implement worker completion detection (success/failure/needs-review)
 
-### Milestone 1.3: Business Logic Modules
+### Milestone 1.3: Reviewer Agent Implementation
 
-- [ ] Extract search-engine.js module (~320 lines, ~25 tests)
-- [ ] Extract message-renderer.js module (~530 lines, ~45 tests)
-- [ ] Extract websocket-client.js module (~380 lines, ~25 tests)
-- [ ] Update app.js to use new modules
-- [ ] Verify app still works after migration
+- [ ] Create ReviewerAgent class that reads worker output and previous feedback
+- [ ] Implement code review logic with structured feedback format
+- [ ] Add review criteria configuration (correctness, completeness, code quality)
+- [ ] Create file persistence for reviewer feedback (`.claudito/ralph/{taskId}/reviewer-feedback.json`)
+- [ ] Implement review decision output (approve/reject with specific feedback)
 
-### Milestone 1.4: Feature Modules
+### Milestone 1.4: Ralph Loop Orchestration
 
-- [ ] Extract roadmap-renderer.js module (~260 lines, ~20 tests)
-- [ ] Extract file-browser.js module (~550 lines, ~25 tests)
-- [ ] Extract git-module.js module (~800 lines, ~30 tests)
-- [ ] Update app.js to use new modules
-- [ ] Final verification and cleanup
+- [ ] Implement RalphLoopManager to coordinate worker/reviewer cycles
+- [ ] Add loop termination conditions (max turns, approval, critical failure)
+- [ ] Create WebSocket events for loop progress (iteration_start, worker_complete, review_complete)
+- [ ] Implement graceful loop interruption and resume capability
+- [ ] Add loop history and metrics tracking
 
-## Phase 2: Autonomous Loop UI
+## Phase 2: Model Selection
 
-Complete the autonomous mode with full UI controls.
+Allow users to choose which Claude model to use for agents, with proper session management.
 
-### Milestone 2.1: Autonomous Loop Controls
+### Milestone 2.1: Model Configuration Backend
 
-- [ ] Add Start Autonomous Loop button in project view
-- [ ] Add Pause/Resume controls for running loop
-- [ ] Display current milestone being processed
-- [ ] Show loop progress indicator (items completed / total)
-- [ ] Add Stop Autonomous Loop button
+- [ ] Add model selection to SettingsRepository (default model preference)
+- [ ] Add per-project model override in ProjectRepository
+- [ ] Create model validation (supported models list from Claude API)
+- [ ] Update ClaudeAgent to accept model parameter via `--model` flag
+- [ ] Implement agent restart when model changes mid-session
 
-### Milestone 2.2: Autonomous Loop Feedback
+### Milestone 2.2: Model Selection UI
 
-- [ ] Display failure reasons when loop pauses
-- [ ] Add Retry Failed Item button
-- [ ] Show milestone completion notifications
-- [ ] Add loop history/log view
-- [ ] Display estimated context usage per item
+- [ ] Add model dropdown in global settings
+- [ ] Add model override option in project settings
+- [ ] Display current model in agent status area
+- [ ] Add model indicator in conversation header
+- [ ] Show model change confirmation dialog (warns about agent restart)
 
-### Milestone 2.3: Autonomous Loop Reliability
+### Milestone 2.3: Ralph Loop Model Configuration
+
+- [ ] Add separate model selection for worker and reviewer agents
+- [ ] Create UI for Ralph Loop model configuration
+- [ ] Add cost estimation display based on model selection
+- [ ] Implement model-specific token limit awareness
+
+## Phase 3: Enhanced Autonomous Loop
+
+Improve the existing autonomous loop with better controls and reliability.
+
+### Milestone 3.1: Autonomous Loop Controls
+
+- [ ] Add Start/Pause/Resume controls in project view
+- [ ] Display current milestone and task being processed
+- [ ] Show loop progress indicator (completed/total items)
+- [ ] Add estimated context usage per item
+- [ ] Implement loop scheduling (delay between items)
+
+### Milestone 3.2: Autonomous Loop Reliability
 
 - [ ] Implement graceful handling of agent crashes during loop
-- [ ] Add timeout handling for stuck agents
+- [ ] Add configurable timeout handling for stuck agents
 - [ ] Create recovery mechanism for interrupted loops
-- [ ] Implement rate limiting between items
 - [ ] Add option to skip failed items and continue
+- [ ] Implement automatic retry with exponential backoff
 
-## Phase 3: Default Permission Mode Support
+### Milestone 3.3: Loop Feedback and History
 
-Add support for Claude's interactive permission prompts.
-
-### Milestone 3.1: Permission Prompt Protocol
-
-- [ ] Research Claude Code CLI permission prompt format
-- [ ] Design UI for displaying permission requests
-- [ ] Implement permission prompt detection in agent output parser
-- [ ] Create permission request event emission
-
-### Milestone 3.2: Permission Prompt UI
-
-- [ ] Display permission prompts in agent output area
-- [ ] Add Allow/Deny buttons for permission requests
-- [ ] Add "Always Allow" option for specific tools
-- [ ] Add "Always Deny" option for specific tools
-- [ ] Show pending permission indicator in sidebar
-
-### Milestone 3.3: Permission Memory
-
-- [ ] Store permission decisions in session
-- [ ] Option to save decisions to project permission rules
-- [ ] Display history of permission decisions
-- [ ] Add bulk permission management
+- [ ] Display failure reasons with actionable suggestions
+- [ ] Add Retry Failed Item button with optional prompt modification
+- [ ] Show milestone completion notifications
+- [ ] Create loop execution history view
+- [ ] Add loop analytics (success rate, average duration per item)
 
 ## Phase 4: Conversation Management
 
-Enhanced conversation features.
+Enhanced conversation features for better workflow management.
 
 ### Milestone 4.1: Export/Import Conversations
 
 - [ ] Export conversation to Markdown format
-- [ ] Export conversation to JSON format
+- [ ] Export conversation to JSON format (full metadata)
 - [ ] Import conversation from JSON
 - [ ] Export all project conversations as archive
+- [ ] Add selective export (filter by date range, tags)
 
-### Milestone 4.2: Conversation Branching
+### Milestone 4.2: Conversation Organization
 
-- [ ] Fork conversation at any message
-- [ ] Display branch indicator in conversation list
-- [ ] Switch between conversation branches
-- [ ] Compare branches side-by-side
-- [ ] Merge learnings from branches
+- [ ] Add conversation tagging system
+- [ ] Implement conversation search with filters
+- [ ] Add conversation favorites/pinning
+- [ ] Create conversation templates from existing conversations
+- [ ] Add bulk conversation management (delete, archive, export)
 
-## Phase 5: Theme Support
+## Phase 5: Agent Configuration Presets
 
-Add visual customization options.
+Quick-start configurations for common development tasks.
 
-### Milestone 5.1: Light Mode
+### Milestone 5.1: Preset System
 
-- [ ] Create light mode color palette
-- [ ] Add theme toggle in settings
-- [ ] Persist theme preference
-- [ ] Update all UI components for light mode
-- [ ] Ensure syntax highlighting works in both modes
+- [ ] Design preset schema (name, model, permission mode, system prompt, rules)
+- [ ] Create PresetRepository for persistence
+- [ ] Add built-in presets (Code Review, Bug Fix, Refactoring, Testing)
+- [ ] Implement preset selection when starting agent
+- [ ] Add preset indicator in agent status
 
-### Milestone 5.2: Custom Themes
+### Milestone 5.2: Custom Presets
 
-- [ ] Define theme schema (colors, fonts, spacing)
-- [ ] Add theme customization UI
-- [ ] Import/export custom themes
-- [ ] Add preset themes (high contrast, sepia, etc.)
+- [ ] Create preset editor UI
+- [ ] Implement "Save current settings as preset" functionality
+- [ ] Add preset import/export (JSON format)
+- [ ] Create per-project default preset setting
+- [ ] Add preset quick-switch keyboard shortcut
 
-## Phase 6: Agent Templates & Presets
+## Phase 6: Multi-Project Dashboard
 
-Quick-start configurations for common tasks.
+Centralized view for managing multiple projects.
 
-### Milestone 6.1: Agent Templates
+### Milestone 6.1: Dashboard View
 
-- [ ] Create template schema (name, description, prompt, settings)
-- [ ] Add built-in templates (debugging, refactoring, testing, code review)
-- [ ] Template selection UI when starting agent
-- [ ] Custom template creation
-- [ ] Template import/export
+- [ ] Create dashboard showing all projects with status
+- [ ] Display agent status indicator for each project
+- [ ] Show recent activity summary per project
+- [ ] Add quick actions (start/stop agent, open project)
+- [ ] Implement project filtering and sorting
 
-### Milestone 6.2: Agent Presets
-
-- [ ] Save current settings as preset (permission mode, system prompt, rules)
-- [ ] Quick-switch between presets
-- [ ] Per-project default preset
-- [ ] Preset management UI
-
-## Phase 7: Search & Navigation
-
-Improved output navigation and search.
-
-### Milestone 7.1: Search in Output
-
-- [x] Add search input in agent output header
-- [x] Highlight search matches in output
-- [x] Navigate between matches (next/previous)
-- [x] Filter output by message type (user, assistant, tool, system)
-- [x] Search across conversation history
-
-### Milestone 7.2: Keyboard Shortcuts
-
-- [ ] Define keyboard shortcut schema
-- [ ] Implement global hotkeys (Ctrl+K search, Escape cancel, etc.)
-- [ ] Add shortcut for stop agent
-- [ ] Add shortcut for toggle sidebar
-- [ ] Add shortcut for switch tabs
-- [ ] Keyboard shortcut customization UI
-- [ ] Display keyboard shortcut hints in UI
-
-## Phase 8: Multi-Project Features
-
-Enhanced multi-project management.
-
-### Milestone 8.1: Multi-Project Dashboard
-
-- [ ] Create dashboard view showing all projects
-- [ ] Display agent status for each project
-- [ ] Show recent activity per project
-- [ ] Quick actions from dashboard (start/stop agent)
-- [ ] Project grouping/folders
-
-### Milestone 8.2: Cross-Project Search
+### Milestone 6.2: Cross-Project Features
 
 - [ ] Search conversations across all projects
-- [ ] Search in project files across all projects
-- [ ] Display unified search results
-- [ ] Jump to result in context
-
-## Phase 9: Notifications & Webhooks
-
-External integrations and alerts.
-
-### Milestone 9.1: Desktop Notifications Enhancement
-
-- [ ] Notification when autonomous loop completes
-- [ ] Notification when agent encounters error
-- [ ] Notification sound options
-- [ ] Notification grouping for multiple events
-- [ ] Do Not Disturb mode
-
-### Milestone 9.2: Webhook Integration
-
-- [ ] Define webhook event types (agent_complete, agent_error, milestone_done)
-- [ ] Webhook configuration UI
-- [ ] Test webhook button
-- [ ] Webhook history/logs
-- [ ] Retry failed webhooks
-
-### Milestone 9.3: Chat Integrations
-
-- [ ] Slack notification integration
-- [ ] Discord notification integration
-- [ ] Custom webhook templates for chat services
-
-## Phase 10: Plugin System
-
-Extensibility framework.
-
-### Milestone 10.1: Plugin Architecture
-
-- [ ] Define plugin API (hooks, events, UI extensions)
-- [ ] Create plugin loader
-- [ ] Plugin manifest schema
-- [ ] Plugin isolation/sandboxing
-
-### Milestone 10.2: Built-in Plugin Types
-
-- [ ] Custom output formatters
-- [ ] Custom tool visualizations
-- [ ] Custom file type handlers
-- [ ] Custom syntax highlighters
-
-### Milestone 10.3: Plugin Management
-
-- [ ] Plugin installation from file
-- [ ] Plugin enable/disable
-- [ ] Plugin configuration UI
-- [ ] Plugin marketplace (future)
+- [ ] Global agent management (stop all, status overview)
+- [ ] Project grouping/folders for organization
+- [ ] Cross-project analytics (total usage, activity trends)

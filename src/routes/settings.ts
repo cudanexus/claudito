@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { SettingsRepository, ClaudePermissions } from '../repositories';
+import { SettingsRepository, ClaudePermissions, PromptTemplate } from '../repositories';
 import { asyncHandler, ValidationError } from '../utils';
 
 interface UpdateSettingsBody {
@@ -10,6 +10,7 @@ interface UpdateSettingsBody {
   historyLimit?: number;
   enableDesktopNotifications?: boolean;
   appendSystemPrompt?: string;
+  promptTemplates?: PromptTemplate[];
 }
 
 export interface SettingsChangeEvent {
@@ -33,7 +34,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
 
   router.put('/', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as UpdateSettingsBody;
-    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt } = body;
+    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt, promptTemplates } = body;
 
     if (maxConcurrentAgents !== undefined && (typeof maxConcurrentAgents !== 'number' || maxConcurrentAgents < 1)) {
       throw new ValidationError('maxConcurrentAgents must be a positive number');
@@ -43,6 +44,10 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
       validatePermissionRules(claudePermissions.allowRules, 'allowRules');
       validatePermissionRules(claudePermissions.denyRules, 'denyRules');
       validatePermissionRules(claudePermissions.askRules, 'askRules');
+    }
+
+    if (promptTemplates !== undefined) {
+      validatePromptTemplates(promptTemplates);
     }
 
     // Get current settings to detect changes
@@ -58,6 +63,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
       historyLimit,
       enableDesktopNotifications,
       appendSystemPrompt,
+      promptTemplates,
     });
 
     // Notify about settings changes
@@ -109,4 +115,41 @@ function isValidPermissionRule(rule: string): boolean {
   const toolWithSpecifierPattern = /^[A-Za-z][A-Za-z0-9_]*\(.+\)$/;
 
   return simpleToolPattern.test(rule) || toolWithSpecifierPattern.test(rule);
+}
+
+function validatePromptTemplates(templates: unknown): void {
+  if (!Array.isArray(templates)) {
+    throw new ValidationError('promptTemplates must be an array');
+  }
+
+  const seenIds = new Set<string>();
+
+  for (const template of templates) {
+    if (typeof template !== 'object' || template === null) {
+      throw new ValidationError('Each template must be an object');
+    }
+
+    const t = template as Record<string, unknown>;
+
+    if (typeof t.id !== 'string' || t.id.trim().length === 0) {
+      throw new ValidationError('Each template must have a non-empty id');
+    }
+
+    if (seenIds.has(t.id)) {
+      throw new ValidationError(`Duplicate template id: ${t.id}`);
+    }
+    seenIds.add(t.id);
+
+    if (typeof t.name !== 'string' || t.name.trim().length === 0) {
+      throw new ValidationError('Each template must have a non-empty name');
+    }
+
+    if (typeof t.content !== 'string') {
+      throw new ValidationError('Each template must have content');
+    }
+
+    if (t.description !== undefined && typeof t.description !== 'string') {
+      throw new ValidationError('Template description must be a string');
+    }
+  }
 }

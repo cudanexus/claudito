@@ -291,6 +291,113 @@
   }
 
   /**
+   * Get result icon
+   */
+  function getResultIcon(isError) {
+    if (isError) {
+      return '<svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
+        '</svg>';
+    }
+
+    return '<svg class="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>' +
+      '</svg>';
+  }
+
+  /**
+   * Check if result is an unknown built-in command
+   */
+  function isUnknownBuiltinCommand(content) {
+    if (!content) return null;
+
+    var match = content.match(/^Unknown skill: (\w+)$/);
+    if (match) {
+      return match[1];
+    }
+
+    return null;
+  }
+
+  /**
+   * Get warning icon for unknown commands
+   */
+  function getWarningIcon() {
+    return '<svg class="w-5 h-5 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' +
+      '</svg>';
+  }
+
+  /**
+   * Render a result message (command output like /usage, /help)
+   */
+  function renderResultMessage(msg) {
+    var isError = msg.resultInfo && msg.resultInfo.isError;
+    var unknownCommand = isUnknownBuiltinCommand(msg.content);
+
+    // Handle "Unknown skill: X" messages specially
+    if (unknownCommand) {
+      return '<div class="conversation-message result bg-amber-900/20 border-l-2 border-amber-500 p-3 rounded" data-msg-type="result">' +
+        '<div class="flex items-start gap-2">' +
+        getWarningIcon() +
+        '<div class="flex-1 min-w-0">' +
+        '<div class="font-medium text-amber-300 text-sm mb-1">Built-in Command Not Available</div>' +
+        '<div class="text-gray-300 text-sm">' +
+        '<p>The <code class="bg-gray-700 px-1 rounded">/' + escapeHtml(unknownCommand) + '</code> command is a built-in Claude Code command that only works in interactive terminal mode.</p>' +
+        '<p class="mt-2 text-gray-400 text-xs">Built-in commands like /usage, /help, /compact, /context, /config, /clear, and /model are UI commands that cannot be used via the API.</p>' +
+        '</div>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+    }
+
+    var borderColor = isError ? 'border-red-500' : 'border-cyan-500';
+    var bgColor = isError ? 'bg-red-900/20' : 'bg-cyan-900/20';
+    var titleColor = isError ? 'text-red-300' : 'text-cyan-300';
+    var title = isError ? 'Command Error' : 'Command Result';
+
+    var html = '<div class="conversation-message result ' + bgColor + ' border-l-2 ' + borderColor + ' p-3 rounded" data-msg-type="result">' +
+      '<div class="flex items-start gap-2">' +
+      getResultIcon(isError) +
+      '<div class="flex-1 min-w-0">' +
+      '<div class="font-medium ' + titleColor + ' text-sm mb-1">' + title + '</div>' +
+      '<div class="text-gray-300 text-sm">' +
+      '<pre class="whitespace-pre-wrap break-words">' + escapeHtml(msg.content) + '</pre>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    return html;
+  }
+
+  /**
+   * Render a status change message (compacting, etc.)
+   */
+  function renderStatusChangeMessage(msg) {
+    var status = msg.statusChangeInfo ? msg.statusChangeInfo.status : 'unknown';
+    var isCompacting = status === 'compacting';
+
+    if (isCompacting) {
+      return '<div class="conversation-message status-change bg-purple-900/20 border-l-2 border-purple-500 p-3 rounded" data-msg-type="status_change" data-status="' + escapeHtml(status) + '">' +
+        '<div class="flex items-center gap-2">' +
+        '<svg class="w-5 h-5 text-purple-400 animate-spin" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>' +
+        '</svg>' +
+        '<span class="text-purple-300 font-medium">Compacting Context</span>' +
+        '</div>' +
+        '<div class="text-gray-400 text-sm mt-1">Summarizing conversation to reduce token usage...</div>' +
+        '</div>';
+    }
+
+    // Generic status message
+    return '<div class="conversation-message status-change bg-gray-800/50 border-l-2 border-gray-500 p-3 rounded" data-msg-type="status_change" data-status="' + escapeHtml(status) + '">' +
+      '<div class="text-gray-400 text-sm">' + escapeHtml(msg.content) + '</div>' +
+      '</div>';
+  }
+
+  /**
    * Render a system/fallback message
    */
   function renderSystemMessage(msg, typeClass) {
@@ -325,6 +432,14 @@
       return renderCompactionMessage(msg);
     }
 
+    if (msg.type === 'result') {
+      return renderResultMessage(msg);
+    }
+
+    if (msg.type === 'status_change') {
+      return renderStatusChangeMessage(msg);
+    }
+
     if (msg.type === 'user') {
       return renderUserMessage(msg);
     }
@@ -345,6 +460,8 @@
     renderPermissionMessage: renderPermissionMessage,
     renderPlanModeMessage: renderPlanModeMessage,
     renderCompactionMessage: renderCompactionMessage,
+    renderResultMessage: renderResultMessage,
+    renderStatusChangeMessage: renderStatusChangeMessage,
     renderUserMessage: renderUserMessage,
     renderAssistantMessage: renderAssistantMessage,
     renderSystemMessage: renderSystemMessage,
@@ -353,6 +470,7 @@
     getClaudeIcon: getClaudeIcon,
     getQuestionIcon: getQuestionIcon,
     getPermissionIcon: getPermissionIcon,
-    getCompactionIcon: getCompactionIcon
+    getCompactionIcon: getCompactionIcon,
+    getResultIcon: getResultIcon
   };
 }));

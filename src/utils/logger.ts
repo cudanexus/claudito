@@ -94,36 +94,44 @@ class CircularBuffer<T> {
   }
 }
 
-class ProjectLogStore {
-  private static instance: ProjectLogStore | null = null;
-  private readonly buffers: Map<string, CircularBuffer<LogEntry>> = new Map();
+class LogStore {
+  private static instance: LogStore | null = null;
+  private readonly projectBuffers: Map<string, CircularBuffer<LogEntry>> = new Map();
+  private readonly globalBuffer: CircularBuffer<LogEntry>;
   private readonly bufferSize: number;
 
   constructor(bufferSize: number = DEFAULT_BUFFER_SIZE) {
     this.bufferSize = bufferSize;
+    this.globalBuffer = new CircularBuffer<LogEntry>(bufferSize * 2); // Global buffer is larger
   }
 
-  static getInstance(): ProjectLogStore {
-    if (!ProjectLogStore.instance) {
-      ProjectLogStore.instance = new ProjectLogStore();
+  static getInstance(): LogStore {
+    if (!LogStore.instance) {
+      LogStore.instance = new LogStore();
     }
 
-    return ProjectLogStore.instance;
+    return LogStore.instance;
   }
 
-  addEntry(projectId: string, entry: LogEntry): void {
-    let buffer = this.buffers.get(projectId);
+  addEntry(entry: LogEntry): void {
+    // Always add to global buffer
+    this.globalBuffer.push(entry);
 
-    if (!buffer) {
-      buffer = new CircularBuffer<LogEntry>(this.bufferSize);
-      this.buffers.set(projectId, buffer);
+    // Also add to project-specific buffer if projectId is present
+    if (entry.projectId) {
+      let buffer = this.projectBuffers.get(entry.projectId);
+
+      if (!buffer) {
+        buffer = new CircularBuffer<LogEntry>(this.bufferSize);
+        this.projectBuffers.set(entry.projectId, buffer);
+      }
+
+      buffer.push(entry);
     }
-
-    buffer.push(entry);
   }
 
   getProjectLogs(projectId: string, limit?: number): LogEntry[] {
-    const buffer = this.buffers.get(projectId);
+    const buffer = this.projectBuffers.get(projectId);
 
     if (!buffer) {
       return [];
@@ -136,12 +144,24 @@ class ProjectLogStore {
     return buffer.getAll();
   }
 
+  getGlobalLogs(limit?: number): LogEntry[] {
+    if (limit) {
+      return this.globalBuffer.getLast(limit);
+    }
+
+    return this.globalBuffer.getAll();
+  }
+
   clearProjectLogs(projectId: string): void {
-    const buffer = this.buffers.get(projectId);
+    const buffer = this.projectBuffers.get(projectId);
 
     if (buffer) {
       buffer.clear();
     }
+  }
+
+  clearGlobalLogs(): void {
+    this.globalBuffer.clear();
   }
 }
 
@@ -150,14 +170,14 @@ export class DefaultLogger implements Logger {
   private readonly name?: string;
   private readonly projectId?: string;
   private readonly output: LogOutput;
-  private readonly logStore: ProjectLogStore;
+  private readonly logStore: LogStore;
 
   constructor(config: LoggerConfig, output?: LogOutput) {
     this.level = config.level;
     this.name = config.name;
     this.projectId = config.projectId;
     this.output = output || new ConsoleLogOutput();
-    this.logStore = ProjectLogStore.getInstance();
+    this.logStore = LogStore.getInstance();
   }
 
   debug(message: string, context?: Record<string, unknown>): void {
@@ -207,9 +227,8 @@ export class DefaultLogger implements Logger {
 
     this.output.write(entry);
 
-    if (this.projectId) {
-      this.logStore.addEntry(this.projectId, entry);
-    }
+    // Always store logs in the log store (both global and project-specific if applicable)
+    this.logStore.addEntry(entry);
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -233,9 +252,17 @@ export function getLogger(name?: string): Logger {
 }
 
 export function getProjectLogs(projectId: string, limit?: number): LogEntry[] {
-  return ProjectLogStore.getInstance().getProjectLogs(projectId, limit);
+  return LogStore.getInstance().getProjectLogs(projectId, limit);
+}
+
+export function getGlobalLogs(limit?: number): LogEntry[] {
+  return LogStore.getInstance().getGlobalLogs(limit);
 }
 
 export function clearProjectLogs(projectId: string): void {
-  ProjectLogStore.getInstance().clearProjectLogs(projectId);
+  LogStore.getInstance().clearProjectLogs(projectId);
+}
+
+export function clearGlobalLogs(): void {
+  LogStore.getInstance().clearGlobalLogs();
 }

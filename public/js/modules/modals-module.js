@@ -20,6 +20,8 @@
   var openModal = null;
   var Formatters = null;
   var FileBrowser = null;
+  var marked = null;
+  var hljs = null;
 
   function init(deps) {
     state = deps.state;
@@ -30,6 +32,8 @@
     openModal = deps.openModal;
     Formatters = deps.Formatters;
     FileBrowser = deps.FileBrowser;
+    marked = deps.marked;
+    hljs = deps.hljs;
   }
 
   // ===== Context Usage Modal =====
@@ -281,12 +285,20 @@
 
     // Render markdown with syntax highlighting
     try {
+      if (!marked || !marked.parse) {
+        $preview.html('<pre class="whitespace-pre-wrap text-gray-300">' + escapeHtml(content) + '</pre>');
+        return;
+      }
+
       var html = marked.parse(content);
       $preview.html(html);
+
       // Apply syntax highlighting to code blocks
-      $preview.find('pre code').each(function() {
-        hljs.highlightElement(this);
-      });
+      if (hljs) {
+        $preview.find('pre code').each(function() {
+          hljs.highlightElement(this);
+        });
+      }
     } catch (e) {
       $preview.html('<p class="text-red-400">Error rendering preview</p>');
     }
@@ -370,6 +382,7 @@
     selectClaudeFile: selectClaudeFile,
     saveClaudeFile: saveClaudeFile,
     toggleClaudeFilePreview: toggleClaudeFilePreview,
+    updateClaudeFilePreview: updateClaudeFilePreview,
     renderClaudeFilesList: renderClaudeFilesList,
     setupHandlers: setupHandlers
   };

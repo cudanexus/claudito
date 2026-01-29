@@ -147,7 +147,7 @@ function computeConversationStats(
     startedAt,
   };
 }
-import { asyncHandler, NotFoundError, ValidationError, ConflictError, getProjectLogs } from '../utils';
+import { asyncHandler, NotFoundError, ValidationError, ConflictError, getProjectLogs, getGlobalLogs } from '../utils';
 import { SettingsRepository } from '../repositories/settings';
 
 export interface ProjectRouterDependencies {
