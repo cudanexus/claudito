@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Server, IncomingMessage } from 'http';
 import { AgentManager, AgentMessage, QueuedProject, AgentResourceStatus, ContextUsage, WaitingStatus, FullAgentStatus } from '../agents';
 import { RoadmapGenerator, RoadmapMessage, AuthService, ShellService } from '../services';
+import { RalphLoopService, RalphLoopStatus, IterationSummary, ReviewerFeedback, RalphLoopFinalStatus } from '../services/ralph-loop/types';
 import { getLogger, Logger } from '../utils/logger';
 import { parseCookie, COOKIE_NAME } from '../middleware/auth-middleware';
 
@@ -20,6 +21,43 @@ export interface ShellErrorData {
   error: string;
 }
 
+export interface RalphLoopStatusData {
+  taskId: string;
+  status: RalphLoopStatus;
+}
+
+export interface RalphLoopIterationData {
+  taskId: string;
+  iteration: number;
+}
+
+export interface RalphLoopOutputData {
+  taskId: string;
+  phase: 'worker' | 'reviewer';
+  content: string;
+}
+
+export interface RalphLoopCompleteData {
+  taskId: string;
+  finalStatus: RalphLoopFinalStatus;
+}
+
+export interface RalphLoopWorkerCompleteData {
+  taskId: string;
+  summary: IterationSummary;
+}
+
+export interface RalphLoopReviewerCompleteData {
+  taskId: string;
+  feedback: ReviewerFeedback;
+}
+
+export interface RalphLoopErrorData {
+  taskId: string;
+  error: string;
+}
+
+
 export interface AgentMessageWithContext extends AgentMessage {
   contextUsage?: ContextUsage;
 }
@@ -36,7 +74,14 @@ export type WebSocketMessageData =
   | ShellOutputData
   | ShellExitData
   | ShellErrorData
-  | string; // Covers 'connected' messages
+  | RalphLoopStatusData
+  | RalphLoopIterationData
+  | RalphLoopOutputData
+  | RalphLoopCompleteData
+  | RalphLoopWorkerCompleteData
+  | RalphLoopReviewerCompleteData
+  | RalphLoopErrorData
+  | string; // Covers 'connected' messages and simple loop events
 
 export interface SessionRecoveryData {
   oldConversationId: string;
@@ -45,7 +90,24 @@ export interface SessionRecoveryData {
 }
 
 export interface WebSocketMessage {
-  type: 'agent_message' | 'agent_status' | 'agent_waiting' | 'queue_change' | 'connected' | 'roadmap_message' | 'session_recovery' | 'shell_output' | 'shell_exit' | 'shell_error';
+  type:
+    | 'agent_message'
+    | 'agent_status'
+    | 'agent_waiting'
+    | 'queue_change'
+    | 'connected'
+    | 'roadmap_message'
+    | 'session_recovery'
+    | 'shell_output'
+    | 'shell_exit'
+    | 'shell_error'
+    | 'ralph_loop_status'
+    | 'ralph_loop_iteration'
+    | 'ralph_loop_worker_complete'
+    | 'ralph_loop_reviewer_complete'
+    | 'ralph_loop_complete'
+    | 'ralph_loop_error'
+;
   projectId?: string;
   data?: WebSocketMessageData | SessionRecoveryData;
 }
@@ -62,6 +124,7 @@ export interface WebSocketServerDependencies {
   roadmapGenerator?: RoadmapGenerator;
   authService?: AuthService;
   shellService?: ShellService;
+  ralphLoopService?: RalphLoopService;
 }
 
 export class DefaultWebSocketServer implements ProjectWebSocketServer {
@@ -70,6 +133,7 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
   private readonly roadmapGenerator?: RoadmapGenerator;
   private readonly authService?: AuthService;
   private readonly shellService?: ShellService;
+  private readonly ralphLoopService?: RalphLoopService;
   private readonly projectSubscriptions: Map<string, Set<WebSocket>> = new Map();
   private readonly logger: Logger;
 
@@ -78,10 +142,12 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     this.roadmapGenerator = deps.roadmapGenerator;
     this.authService = deps.authService;
     this.shellService = deps.shellService;
+    this.ralphLoopService = deps.ralphLoopService;
     this.logger = getLogger('websocket');
     this.setupAgentListeners();
     this.setupRoadmapListeners();
     this.setupShellListeners();
+    this.setupRalphLoopListeners();
   }
 
   initialize(httpServer: Server): void {
@@ -280,6 +346,7 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
         },
       });
     });
+
   }
 
   private setupRoadmapListeners(): void {
@@ -346,6 +413,63 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
           data: { sessionId, error },
         });
       }
+    });
+  }
+
+  private setupRalphLoopListeners(): void {
+    if (!this.ralphLoopService) {
+      this.logger.debug('No Ralph Loop service provided, skipping listener setup');
+      return;
+    }
+
+    this.logger.info('Setting up Ralph Loop service listeners');
+
+    this.ralphLoopService.on('status_change', (projectId, taskId, status) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_status',
+        projectId,
+        data: { taskId, status },
+      });
+    });
+
+    this.ralphLoopService.on('iteration_start', (projectId, taskId, iteration) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_iteration',
+        projectId,
+        data: { taskId, iteration },
+      });
+    });
+
+    this.ralphLoopService.on('worker_complete', (projectId, taskId, summary) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_worker_complete',
+        projectId,
+        data: { taskId, summary },
+      });
+    });
+
+    this.ralphLoopService.on('reviewer_complete', (projectId, taskId, feedback) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_reviewer_complete',
+        projectId,
+        data: { taskId, feedback },
+      });
+    });
+
+    this.ralphLoopService.on('loop_complete', (projectId, taskId, finalStatus) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_complete',
+        projectId,
+        data: { taskId, finalStatus },
+      });
+    });
+
+    this.ralphLoopService.on('loop_error', (projectId, taskId, error) => {
+      this.broadcastToProject(projectId, {
+        type: 'ralph_loop_error',
+        projectId,
+        data: { taskId, error },
+      });
     });
   }
 }

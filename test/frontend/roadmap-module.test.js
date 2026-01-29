@@ -232,17 +232,17 @@ describe('RoadmapModule', () => {
     });
   });
 
-  describe('runSelectedTasks', () => {
-    it('should show error toast when no items selected', () => {
+  describe('convertToTasks', () => {
+    it('should show warning toast when no items selected', () => {
       global.$ = jest.fn().mockReturnValue({
         each: jest.fn(),
         removeClass: jest.fn().mockReturnThis(),
         addClass: jest.fn().mockReturnThis()
       });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
-      expect(mockShowToast).toHaveBeenCalledWith('No items selected', 'error');
+      expect(mockShowToast).toHaveBeenCalledWith('Please select items to convert', 'warning');
     });
 
     it('should send message to running agent', () => {
@@ -284,7 +284,7 @@ describe('RoadmapModule', () => {
 
       mockFindProjectById.mockReturnValue({ status: 'running' });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
       expect(mockCloseModal).toHaveBeenCalledWith('modal-roadmap');
       expect(mockDoSendMessage).toHaveBeenCalled();
@@ -328,7 +328,7 @@ describe('RoadmapModule', () => {
 
       mockFindProjectById.mockReturnValue({ status: 'stopped' });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
       expect(mockCloseModal).toHaveBeenCalledWith('modal-roadmap');
       expect(mockStartInteractiveAgentWithMessage).toHaveBeenCalled();
@@ -379,12 +379,12 @@ describe('RoadmapModule', () => {
         capturedPrompt = prompt;
       });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
-      expect(capturedPrompt).toContain('Please work on the following roadmap items:');
+      expect(capturedPrompt).toContain('Please convert the following roadmap items into actionable tasks');
       expect(capturedPrompt).toContain('**Milestone**: Setup Database');
-      expect(capturedPrompt).toContain('Complete all pending tasks in this milestone');
-      expect(capturedPrompt).toContain('Update the ROADMAP.md to mark completed items with [x]');
+      expect(capturedPrompt).toContain('Break it down into specific, actionable sub-tasks');
+      expect(capturedPrompt).toContain('Add these to your todo list using the TodoWrite tool');
     });
 
     it('should generate correct prompt for task items', () => {
@@ -430,7 +430,7 @@ describe('RoadmapModule', () => {
         capturedPrompt = prompt;
       });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
       expect(capturedPrompt).toContain('**Task**: Create user table');
     });
@@ -454,7 +454,6 @@ describe('RoadmapModule', () => {
       };
 
       let capturedPrompt = '';
-      let currentMockElement = null;
 
       global.$ = jest.fn((selector) => {
         if (typeof selector === 'object') {
@@ -464,7 +463,6 @@ describe('RoadmapModule', () => {
         if (selector === '.roadmap-select-milestone:checked') {
           return {
             each: (cb) => {
-              currentMockElement = mockMilestoneElement;
               cb.call(mockMilestoneElement, 0, mockMilestoneElement);
             }
           };
@@ -473,7 +471,6 @@ describe('RoadmapModule', () => {
         if (selector === '.roadmap-select-task:checked:not(:disabled)') {
           return {
             each: (cb) => {
-              currentMockElement = mockTaskElement;
               cb.call(mockTaskElement, 0, mockTaskElement);
             }
           };
@@ -493,7 +490,7 @@ describe('RoadmapModule', () => {
         capturedPrompt = prompt;
       });
 
-      RoadmapModule.runSelectedTasks();
+      RoadmapModule.convertToTasks();
 
       // Should only include the milestone, not the individual task
       expect(capturedPrompt).toContain('**Milestone**: Database Setup');

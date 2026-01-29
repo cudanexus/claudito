@@ -35,6 +35,8 @@ export interface ProjectStatus {
   currentItem: MilestoneItemRef | null;
   lastContextUsage: ContextUsageData | null;
   permissionOverrides: ProjectPermissionOverrides | null;
+  /** Project-specific model override (null = use global default) */
+  modelOverride: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,6 +62,7 @@ export interface ProjectRepository {
   setCurrentConversation(id: string, conversationId: string | null): Promise<ProjectStatus | null>;
   updateContextUsage(id: string, contextUsage: ContextUsageData | null): Promise<ProjectStatus | null>;
   updatePermissionOverrides(id: string, overrides: ProjectPermissionOverrides | null): Promise<ProjectStatus | null>;
+  updateModelOverride(id: string, model: string | null): Promise<ProjectStatus | null>;
   delete(id: string): Promise<boolean>;
 }
 
@@ -322,6 +325,7 @@ export class FileProjectRepository implements ProjectRepository {
       currentItem: null,
       lastContextUsage: null,
       permissionOverrides: null,
+      modelOverride: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -403,6 +407,18 @@ export class FileProjectRepository implements ProjectRepository {
     }
 
     status.permissionOverrides = overrides;
+    this.saveStatus(status);
+    return Promise.resolve({ ...status });
+  }
+
+  updateModelOverride(id: string, model: string | null): Promise<ProjectStatus | null> {
+    const status = this.loadStatus(id);
+
+    if (!status) {
+      return Promise.resolve(null);
+    }
+
+    status.modelOverride = model;
     this.saveStatus(status);
     return Promise.resolve({ ...status });
   }

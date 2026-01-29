@@ -162,6 +162,7 @@
     return $.get(baseUrl + '/api/projects/' + id + '/agent/loop');
   };
 
+
   ApiClient.getContextUsage = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/agent/context');
   };
@@ -299,6 +300,42 @@
       method: 'PUT',
       contentType: 'application/json',
       data: JSON.stringify(settings)
+    });
+  };
+
+  /**
+   * Get available Claude models
+   * @returns {Promise} Resolves with {models: [{id, displayName}]}
+   */
+  ApiClient.getAvailableModels = function() {
+    return $.get(baseUrl + '/api/settings/models');
+  };
+
+  // ============================================================
+  // Project Model
+  // ============================================================
+
+  /**
+   * Get project model configuration
+   * @param {string} projectId - Project ID
+   * @returns {Promise} Resolves with {projectModel, effectiveModel, globalDefault}
+   */
+  ApiClient.getProjectModel = function(projectId) {
+    return $.get(baseUrl + '/api/projects/' + projectId + '/model');
+  };
+
+  /**
+   * Set project model override
+   * @param {string} projectId - Project ID
+   * @param {string|null} model - Model ID or null to clear override
+   * @returns {Promise} Resolves on success
+   */
+  ApiClient.setProjectModel = function(projectId, model) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/model',
+      method: 'PUT',
+      contentType: 'application/json',
+      data: JSON.stringify({ model: model })
     });
   };
 
@@ -510,6 +547,100 @@
 
   ApiClient.stopShell = function(projectId) {
     return $.post(baseUrl + '/api/projects/' + projectId + '/shell/stop');
+  };
+
+  // ============================================================
+  // Ralph Loop
+  // ============================================================
+
+  /**
+   * Start a new Ralph Loop for a project
+   * @param {string} projectId - Project ID
+   * @param {Object} config - Loop configuration
+   * @param {string} config.taskDescription - Task description for the worker
+   * @param {number} [config.maxTurns] - Maximum iterations (default: 5)
+   * @param {string} [config.workerModel] - Model for worker agent
+   * @param {string} [config.reviewerModel] - Model for reviewer agent
+   * @returns {Promise} Resolves with the new Ralph Loop state
+   */
+  ApiClient.startRalphLoop = function(projectId, config) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/ralph-loop/start',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify(config)
+    });
+  };
+
+  /**
+   * Stop a running Ralph Loop
+   * @param {string} projectId - Project ID
+   * @param {string} taskId - Task ID of the loop to stop
+   * @returns {Promise} Resolves on success
+   */
+  ApiClient.stopRalphLoop = function(projectId, taskId) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId + '/stop',
+      method: 'POST'
+    });
+  };
+
+  /**
+   * Pause a running Ralph Loop
+   * @param {string} projectId - Project ID
+   * @param {string} taskId - Task ID of the loop to pause
+   * @returns {Promise} Resolves on success
+   */
+  ApiClient.pauseRalphLoop = function(projectId, taskId) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId + '/pause',
+      method: 'POST'
+    });
+  };
+
+  /**
+   * Resume a paused Ralph Loop
+   * @param {string} projectId - Project ID
+   * @param {string} taskId - Task ID of the loop to resume
+   * @returns {Promise} Resolves on success
+   */
+  ApiClient.resumeRalphLoop = function(projectId, taskId) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId + '/resume',
+      method: 'POST'
+    });
+  };
+
+  /**
+   * Get all Ralph Loops for a project
+   * @param {string} projectId - Project ID
+   * @returns {Promise} Resolves with array of Ralph Loop states
+   */
+  ApiClient.getRalphLoops = function(projectId) {
+    return $.get(baseUrl + '/api/projects/' + projectId + '/ralph-loop');
+  };
+
+  /**
+   * Get a specific Ralph Loop state
+   * @param {string} projectId - Project ID
+   * @param {string} taskId - Task ID of the loop
+   * @returns {Promise} Resolves with the Ralph Loop state
+   */
+  ApiClient.getRalphLoopState = function(projectId, taskId) {
+    return $.get(baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId);
+  };
+
+  /**
+   * Delete a Ralph Loop
+   * @param {string} projectId - Project ID
+   * @param {string} taskId - Task ID of the loop to delete
+   * @returns {Promise} Resolves on success
+   */
+  ApiClient.deleteRalphLoop = function(projectId, taskId) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId,
+      method: 'DELETE'
+    });
   };
 
   // ============================================================

@@ -331,6 +331,38 @@ describe('ApiClient', () => {
         data: JSON.stringify(settings)
       });
     });
+
+    it('getAvailableModels should GET correct endpoint', () => {
+      ApiClient.getAvailableModels();
+      expect(mockGet).toHaveBeenCalledWith('/api/settings/models');
+    });
+  });
+
+  describe('Project Model', () => {
+    it('getProjectModel should GET correct endpoint', () => {
+      ApiClient.getProjectModel('proj-123');
+      expect(mockGet).toHaveBeenCalledWith('/api/projects/proj-123/model');
+    });
+
+    it('setProjectModel should PUT with model', () => {
+      ApiClient.setProjectModel('proj-123', 'claude-opus-4-20250514');
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/model',
+        method: 'PUT',
+        contentType: 'application/json',
+        data: JSON.stringify({ model: 'claude-opus-4-20250514' })
+      });
+    });
+
+    it('setProjectModel should PUT with null to clear override', () => {
+      ApiClient.setProjectModel('proj-123', null);
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/model',
+        method: 'PUT',
+        contentType: 'application/json',
+        data: JSON.stringify({ model: null })
+      });
+    });
   });
 
   describe('Filesystem', () => {
@@ -529,6 +561,77 @@ describe('ApiClient', () => {
           url: '/api/projects/proj-123/git/tags/v1.0.0-beta.1/push'
         })
       );
+    });
+  });
+
+  describe('Ralph Loop', () => {
+    it('startRalphLoop should POST with config', () => {
+      const config = {
+        taskDescription: 'Implement feature X',
+        maxTurns: 5,
+        workerModel: 'claude-sonnet-4-20250514',
+        reviewerModel: 'claude-sonnet-4-20250514'
+      };
+      ApiClient.startRalphLoop('proj-123', config);
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/start',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(config)
+      });
+    });
+
+    it('startRalphLoop should work with minimal config', () => {
+      const config = { taskDescription: 'Simple task' };
+      ApiClient.startRalphLoop('proj-123', config);
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/start',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(config)
+      });
+    });
+
+    it('stopRalphLoop should POST to correct endpoint', () => {
+      ApiClient.stopRalphLoop('proj-123', 'task-456');
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/task-456/stop',
+        method: 'POST'
+      });
+    });
+
+    it('pauseRalphLoop should POST to correct endpoint', () => {
+      ApiClient.pauseRalphLoop('proj-123', 'task-456');
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/task-456/pause',
+        method: 'POST'
+      });
+    });
+
+    it('resumeRalphLoop should POST to correct endpoint', () => {
+      ApiClient.resumeRalphLoop('proj-123', 'task-456');
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/task-456/resume',
+        method: 'POST'
+      });
+    });
+
+    it('getRalphLoops should GET correct endpoint', () => {
+      ApiClient.getRalphLoops('proj-123');
+      expect(mockGet).toHaveBeenCalledWith('/api/projects/proj-123/ralph-loop');
+    });
+
+    it('getRalphLoopState should GET correct endpoint with taskId', () => {
+      ApiClient.getRalphLoopState('proj-123', 'task-456');
+      expect(mockGet).toHaveBeenCalledWith('/api/projects/proj-123/ralph-loop/task-456');
+    });
+
+    it('deleteRalphLoop should DELETE correct endpoint', () => {
+      ApiClient.deleteRalphLoop('proj-123', 'task-456');
+      expect(mockAjax).toHaveBeenCalledWith({
+        url: '/api/projects/proj-123/ralph-loop/task-456',
+        method: 'DELETE'
+      });
     });
   });
 

@@ -160,6 +160,14 @@
                   <span>Plan</span>
                 </button>
               </div>
+              <!-- Model Selector -->
+              <div id="model-selector" class="flex items-center bg-gray-700 rounded text-sm ml-1 h-7" title="Select Claude model for this project">
+                <select id="project-model-select" class="bg-transparent text-white text-sm px-2 h-full rounded cursor-pointer focus:outline-none focus:ring-1 focus:ring-purple-500 appearance-none pr-6" style="background-image: url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%239ca3af%22 stroke-width=%222%22%3E%3Cpath stroke-linecap=%22round%22 stroke-linejoin=%22round%22 d=%22M19 9l-7 7-7-7%22/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right 0.25rem center; background-size: 1rem;">
+                  <option value="">Default</option>
+                  <option value="claude-sonnet-4-20250514">Sonnet 4</option>
+                  <option value="claude-opus-4-20250514">Opus 4</option>
+                </select>
+              </div>
               <!-- Start/Stop only for autonomous mode -->
               <button id="btn-start-agent" class="bg-green-600 hover:bg-green-700 text-white h-7 px-2.5 rounded flex items-center justify-center gap-1.5 text-sm transition-colors hidden">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -225,6 +233,12 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
               </svg>
               Shell
+            </button>
+            <button id="tab-ralph-loop" class="tab-button py-2 px-4 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-gray-200">
+              <svg class="w-4 h-4 inline-block mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              Ralph Loop
             </button>
           </div>
 
@@ -333,6 +347,8 @@
                 </button>
               </div>
             </div>
+
+
             <div id="conversation-container" class="flex-1 overflow-y-auto p-3 relative">
               <div id="conversation" class="space-y-2 font-mono text-sm">
                 <!-- Conversation messages will be rendered here -->
@@ -579,6 +595,16 @@
             <!-- Terminal Container -->
             <div id="shell-terminal" class="flex-1 p-2 bg-gray-900"></div>
           </div>
+
+          <!-- Ralph Loop Tab Content -->
+          <div id="tab-content-ralph-loop" class="tab-content flex-1 overflow-hidden hidden flex flex-col">
+            <div class="flex-1 overflow-y-auto p-3">
+              <div id="ralph-loop-panel">
+                <!-- Ralph Loop module will render content here -->
+                <div class="text-gray-500 text-center py-8">Loading...</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Input Area for Interactive Mode -->
@@ -724,17 +750,22 @@
       <div class="bg-gray-800 rounded-lg shadow-xl w-full max-w-6xl max-h-[85vh] flex flex-col">
         <div class="p-3 border-b border-gray-700 flex items-center justify-between">
           <h3 class="font-semibold">Project Roadmap</h3>
-          <button class="modal-close text-gray-400 hover:text-white">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <button id="btn-create-roadmap" type="button" class="bg-gray-600 hover:bg-gray-500 text-white px-3 py-1.5 rounded text-sm transition-colors">
+              Generate new Roadmap
+            </button>
+            <button class="modal-close text-gray-400 hover:text-white">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div id="roadmap-content" class="flex-1 overflow-y-auto p-3 text-xs">
           <!-- Roadmap content will be rendered here -->
         </div>
         <div class="p-3 border-t border-gray-700">
-          <!-- Run selected tasks section -->
+          <!-- Selected items section -->
           <div id="roadmap-run-selected" class="hidden mb-3 p-2 bg-purple-900/30 border border-purple-600/50 rounded">
             <div class="flex items-center justify-between gap-2">
               <span class="text-sm text-purple-300">
@@ -744,12 +775,11 @@
                 <button id="btn-clear-roadmap-selection" type="button" class="text-xs text-gray-400 hover:text-white transition-colors">
                   Clear
                 </button>
-                <button id="btn-run-selected-tasks" type="button" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-1">
+                <button id="btn-convert-to-tasks" type="button" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-1">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
                   </svg>
-                  Run Selected
+                  Convert to Tasks
                 </button>
               </div>
             </div>
@@ -758,14 +788,9 @@
             <textarea name="editPrompt" id="input-edit-roadmap" rows="3" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm textarea-resizable" placeholder="Describe changes (e.g., 'Add a testing phase'). Ctrl+Enter to submit"></textarea>
             <div class="flex items-center justify-between gap-2">
               <span id="edit-roadmap-char-count" class="text-xs text-gray-400">0 characters</span>
-              <div class="flex gap-2">
-                <button id="btn-create-roadmap" type="button" class="bg-gray-600 hover:bg-gray-500 text-white px-3 py-1.5 rounded text-sm transition-colors">
-                  Generate New
-                </button>
-                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm transition-colors">
-                  Modify
-                </button>
-              </div>
+              <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm transition-colors">
+                Modify
+              </button>
             </div>
           </form>
         </div>
@@ -958,6 +983,14 @@
                 </label>
                 <p class="text-xs text-gray-500 ml-6">Get notified when an agent is waiting for your input</p>
               </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-300 mb-1">Default Claude Model</label>
+              <select id="input-default-model" class="w-64 bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-purple-500">
+                <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                <option value="claude-opus-4-20250514">Claude Opus 4</option>
+              </select>
+              <p class="text-xs text-gray-500 mt-1">Default model for new agent sessions. Can be overridden per-project.</p>
             </div>
           </div>
 
@@ -1965,6 +1998,8 @@
     </div>
   </div>
 
+  <!-- Loop Settings Modal -->
+
   <!-- Toast Container -->
   <div id="toast-container" class="fixed bottom-4 right-4 space-y-2 z-50"></div>
 
@@ -1978,6 +2013,7 @@
   <script src="/js/modules/escape-utils.js"></script>
   <script src="/js/modules/git-module.js"></script>
   <script src="/js/modules/shell-module.js"></script>
+  <script src="/js/modules/ralph-loop-module.js"></script>
   <script src="/js/modules/debug-modal.js"></script>
   <script src="/js/modules/file-browser.js"></script>
   <script src="/js/modules/roadmap-module.js"></script>

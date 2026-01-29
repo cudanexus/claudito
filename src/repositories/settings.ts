@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { DEFAULT_MODEL, isValidModel } from '../config/models';
+
 export interface PermissionRule {
   tool: string;
   specifier?: string;
@@ -59,6 +61,15 @@ export interface PromptTemplate {
   name: string;
   description: string;
   content: string;
+}
+
+export interface RalphLoopSettings {
+  /** Default maximum turns for Ralph Loop */
+  defaultMaxTurns: number;
+  /** Default model for worker agent */
+  defaultWorkerModel: string;
+  /** Default model for reviewer agent */
+  defaultReviewerModel: string;
 }
 
 export const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [
@@ -167,6 +178,10 @@ export interface GlobalSettings {
   agentStreaming: AgentStreamingSettings;
   /** Prompt templates for quick message insertion */
   promptTemplates: PromptTemplate[];
+  /** Ralph Loop settings for worker/reviewer iterations */
+  ralphLoop: RalphLoopSettings;
+  /** Default Claude model for agents */
+  defaultModel: string;
 }
 
 const DEFAULT_SETTINGS: GlobalSettings = {
@@ -193,6 +208,12 @@ const DEFAULT_SETTINGS: GlobalSettings = {
     noSessionPersistence: false,
   },
   promptTemplates: DEFAULT_PROMPT_TEMPLATES,
+  ralphLoop: {
+    defaultMaxTurns: 5,
+    defaultWorkerModel: 'claude-sonnet-4-20250514',
+    defaultReviewerModel: 'claude-sonnet-4-20250514',
+  },
+  defaultModel: DEFAULT_MODEL,
 };
 
 // Update type that allows partial nested objects for incremental updates
@@ -208,6 +229,8 @@ export interface SettingsUpdate {
   agentLimits?: Partial<AgentLimitsSettings>;
   agentStreaming?: Partial<AgentStreamingSettings>;
   promptTemplates?: PromptTemplate[];
+  ralphLoop?: Partial<RalphLoopSettings>;
+  defaultModel?: string;
 }
 
 export interface SettingsRepository {
@@ -265,6 +288,7 @@ export class FileSettingsRepository implements SettingsRepository {
     const parsedPerms = parsed.claudePermissions;
     const parsedLimits = parsed.agentLimits;
     const parsedStreaming = parsed.agentStreaming;
+    const parsedRalphLoop = parsed.ralphLoop;
 
     return {
       maxConcurrentAgents: parsed.maxConcurrentAgents ?? DEFAULT_SETTINGS.maxConcurrentAgents,
@@ -290,6 +314,12 @@ export class FileSettingsRepository implements SettingsRepository {
         noSessionPersistence: parsedStreaming?.noSessionPersistence ?? DEFAULT_SETTINGS.agentStreaming.noSessionPersistence,
       },
       promptTemplates: Array.isArray(parsed.promptTemplates) ? parsed.promptTemplates : DEFAULT_SETTINGS.promptTemplates,
+      ralphLoop: {
+        defaultMaxTurns: parsedRalphLoop?.defaultMaxTurns ?? DEFAULT_SETTINGS.ralphLoop.defaultMaxTurns,
+        defaultWorkerModel: parsedRalphLoop?.defaultWorkerModel ?? DEFAULT_SETTINGS.ralphLoop.defaultWorkerModel,
+        defaultReviewerModel: parsedRalphLoop?.defaultReviewerModel ?? DEFAULT_SETTINGS.ralphLoop.defaultReviewerModel,
+      },
+      defaultModel: parsed.defaultModel ?? DEFAULT_SETTINGS.defaultModel,
     };
   }
 
@@ -359,6 +389,25 @@ export class FileSettingsRepository implements SettingsRepository {
 
     if (updates.promptTemplates !== undefined) {
       this.settings.promptTemplates = updates.promptTemplates;
+    }
+
+    if (updates.ralphLoop) {
+      this.settings.ralphLoop = {
+        ...this.settings.ralphLoop,
+        ...updates.ralphLoop,
+      };
+
+      // Ensure positive maxTurns
+      if (this.settings.ralphLoop.defaultMaxTurns < 1) {
+        this.settings.ralphLoop.defaultMaxTurns = 1;
+      }
+    }
+
+    if (updates.defaultModel !== undefined) {
+      // Validate model if provided, otherwise keep current
+      if (isValidModel(updates.defaultModel)) {
+        this.settings.defaultModel = updates.defaultModel;
+      }
     }
 
     this.saveToFile();

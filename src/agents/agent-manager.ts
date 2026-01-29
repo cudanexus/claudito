@@ -52,6 +52,7 @@ export interface AgentResourceStatus {
   queuedProjects: QueuedProject[];
 }
 
+
 export interface AgentLoopState {
   isLooping: boolean;
   currentMilestone: MilestoneRef | null;
@@ -153,6 +154,8 @@ export interface AgentFactoryOptions {
   streaming?: AgentStreamingOptions;
   sessionId?: string;
   isNewSession?: boolean;
+  /** Claude model to use (e.g., 'claude-sonnet-4-20250514') */
+  model?: string;
 }
 
 export interface AgentFactory {
@@ -506,6 +509,8 @@ export class DefaultAgentManager implements AgentManager {
     };
   }
 
+
+
   getLastCommand(projectId: string): string | null {
     const agent = this.agents.get(projectId);
     return agent?.lastCommand || null;
@@ -570,6 +575,7 @@ export class DefaultAgentManager implements AgentManager {
       return;
     }
 
+
     const project = await this.projectRepository.findById(projectId);
 
     if (!project) {
@@ -598,6 +604,7 @@ export class DefaultAgentManager implements AgentManager {
 
     const milestoneRef = this.createMilestoneRef(milestoneContext);
     loopState.currentMilestone = milestoneRef;
+
 
     // Clear nextItem since we're working on milestone now
     await this.projectRepository.updateNextItem(projectId, null);
@@ -632,11 +639,17 @@ export class DefaultAgentManager implements AgentManager {
     });
 
     // Start the agent
+    await this.startMilestoneAgent(projectId, project.path, instructions, milestoneRef);
+  }
+
+  private async startMilestoneAgent(projectId: string, projectPath: string, instructions: string, milestoneRef: MilestoneRef): Promise<void> {
+    const projectLogger = this.logger.withProject(projectId);
+
     try {
       if (this.agents.size >= this.maxConcurrentAgents) {
         await this.addToQueue(projectId, instructions);
       } else {
-        await this.startAgentImmediately(projectId, project.path, instructions);
+        await this.startAgentImmediately(projectId, projectPath, instructions);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -745,6 +758,9 @@ export class DefaultAgentManager implements AgentManager {
       noSessionPersistence: settings.agentStreaming.noSessionPersistence,
     };
 
+    // Get model for this project (project override or global default)
+    const model = await this.getModelForProject(projectId);
+
     const agent = this.agentFactory.create({
       projectId,
       projectPath,
@@ -754,6 +770,7 @@ export class DefaultAgentManager implements AgentManager {
       streaming,
       sessionId,
       isNewSession,
+      model,
     });
     this.setupAgentListeners(agent);
     this.agents.set(projectId, agent);
@@ -814,6 +831,7 @@ export class DefaultAgentManager implements AgentManager {
         streaming,
         sessionId: newConversation.id,
         isNewSession: true,
+        model,
       });
       this.setupAgentListeners(freshAgent);
       this.agents.set(projectId, freshAgent);
@@ -827,6 +845,17 @@ export class DefaultAgentManager implements AgentManager {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async getModelForProject(projectId: string): Promise<string> {
+    const project = await this.projectRepository.findById(projectId);
+
+    if (project?.modelOverride) {
+      return project.modelOverride;
+    }
+
+    const settings = await this.settingsRepository.get();
+    return settings.defaultModel;
   }
 
   private async addToQueue(projectId: string, instructions: string): Promise<void> {

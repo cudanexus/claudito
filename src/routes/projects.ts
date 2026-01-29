@@ -7,6 +7,8 @@ import { ProjectService, RoadmapParser, RoadmapGenerator, InstructionGenerator, 
 import { GitService } from '../services/git-service';
 import { AgentManager } from '../agents';
 import { getLogger } from '../utils';
+import { RalphLoopService, RalphLoopConfig } from '../services/ralph-loop/types';
+import { SUPPORTED_MODELS, isValidModel, getModelDisplayName } from '../config/models';
 
 // Request body types
 interface CreateProjectBody {
@@ -51,6 +53,7 @@ interface AgentMessageBody {
   sessionId?: string;
   permissionMode?: 'acceptEdits' | 'plan';
 }
+
 
 interface RenameConversationBody {
   label?: string;
@@ -114,6 +117,17 @@ interface ShellResizeBody {
   rows?: number;
 }
 
+interface RalphLoopStartBody {
+  taskDescription?: string;
+  maxTurns?: number;
+  workerModel?: string;
+  reviewerModel?: string;
+}
+
+interface ModelOverrideBody {
+  model?: string | null;
+}
+
 function computeConversationStats(
   messages: AgentMessage[],
   createdAt: string | null
@@ -163,6 +177,7 @@ export interface ProjectRouterDependencies {
   gitService: GitService;
   shellService?: ShellService | null;
   shellEnabled?: boolean;
+  ralphLoopService?: RalphLoopService | null;
 }
 
 export interface ConversationStats {
@@ -602,7 +617,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     res.json({ messages });
   }));
 
-  // Get loop status
+  // Get loop status (enhanced with progress tracking)
   router.get('/:id/agent/loop', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
     const project = await projectRepository.findById(id);
@@ -612,12 +627,18 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     }
 
     const loopState = agentManager.getLoopState(id);
-    res.json({
-      isLooping: loopState?.isLooping || false,
-      currentMilestone: loopState?.currentMilestone || null,
-      currentConversationId: loopState?.currentConversationId || null,
-    });
+
+    if (!loopState) {
+      // Return a simple object with isLooping false when no loop state
+      res.json({ isLooping: false });
+    } else {
+      // Return the full loop state
+      res.json(loopState);
+    }
   }));
+
+
+
 
   router.delete('/:id/agent/queue', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id'] as string;
@@ -942,7 +963,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     const project = await projectRepository.findById(projectId);
 
     if (!project) {
-      throw new NotFoundError('Project not found');
+      throw new NotFoundError('Project');
     }
 
     res.json(project.permissionOverrides || { enabled: false });
@@ -954,7 +975,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     const project = await projectRepository.findById(projectId);
 
     if (!project) {
-      throw new NotFoundError('Project not found');
+      throw new NotFoundError('Project');
     }
 
     const body = req.body as PermissionOverridesBody;
@@ -969,13 +990,62 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     res.json(updated?.permissionOverrides || { enabled: false });
   }));
 
+  // GET /api/projects/:id/model - Get project model configuration
+  router.get('/:id/model', asyncHandler(async (req: Request, res: Response) => {
+    const projectId = req.params.id as string;
+    const project = await projectRepository.findById(projectId);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const settings = await settingsRepository.get();
+    const effectiveModel = project.modelOverride || settings.defaultModel;
+
+    res.json({
+      projectModel: project.modelOverride,
+      effectiveModel,
+      globalDefault: settings.defaultModel,
+      effectiveModelDisplayName: getModelDisplayName(effectiveModel),
+    });
+  }));
+
+  // PUT /api/projects/:id/model - Set project model override
+  router.put('/:id/model', asyncHandler(async (req: Request, res: Response) => {
+    const projectId = req.params.id as string;
+    const project = await projectRepository.findById(projectId);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const body = req.body as ModelOverrideBody;
+    const { model } = body;
+
+    // Validate model if provided
+    if (model !== null && model !== undefined && !isValidModel(model)) {
+      throw new ValidationError(`Invalid model: ${model}. Supported models: ${SUPPORTED_MODELS.join(', ')}`);
+    }
+
+    const updated = await projectRepository.updateModelOverride(projectId, model || null);
+    const settings = await settingsRepository.get();
+    const effectiveModel = updated?.modelOverride || settings.defaultModel;
+
+    res.json({
+      projectModel: updated?.modelOverride || null,
+      effectiveModel,
+      globalDefault: settings.defaultModel,
+      effectiveModelDisplayName: getModelDisplayName(effectiveModel),
+    });
+  }));
+
   // GET /api/projects/:id/optimizations - Get optimization suggestions for the project
   router.get('/:id/optimizations', asyncHandler(async (req: Request, res: Response) => {
     const projectId = req.params.id as string;
     const project = await projectRepository.findById(projectId);
 
     if (!project) {
-      throw new NotFoundError('Project not found');
+      throw new NotFoundError('Project');
     }
 
     const settings = await settingsRepository.get();
@@ -1457,6 +1527,224 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
     shellService.killSession(session.id);
     res.json({ success: true });
   });
+
+  // ============================================================================
+  // Ralph Loop Routes
+  // ============================================================================
+
+  const ralphLoopDisabledMessage = 'Ralph Loop service is not available';
+
+  // Start a new Ralph Loop
+  router.post('/:id/ralph-loop/start', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const body = req.body as RalphLoopStartBody;
+
+    if (!body.taskDescription) {
+      throw new ValidationError('Task description is required');
+    }
+
+    const settings = await settingsRepository.get();
+    const ralphLoopSettings = settings.ralphLoop || {
+      defaultMaxTurns: 5,
+      defaultWorkerModel: 'claude-sonnet-4-20250514',
+      defaultReviewerModel: 'claude-sonnet-4-20250514',
+    };
+
+    const config: RalphLoopConfig = {
+      taskDescription: body.taskDescription,
+      maxTurns: body.maxTurns ?? ralphLoopSettings.defaultMaxTurns,
+      workerModel: body.workerModel ?? ralphLoopSettings.defaultWorkerModel,
+      reviewerModel: body.reviewerModel ?? ralphLoopSettings.defaultReviewerModel,
+    };
+
+    const state = await ralphLoopService.start(id, config);
+    res.status(201).json(state);
+  }));
+
+  // List all Ralph Loops for a project
+  router.get('/:id/ralph-loop', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const loops = await ralphLoopService.listByProject(id);
+    res.json(loops);
+  }));
+
+  // Get specific Ralph Loop state
+  router.get('/:id/ralph-loop/:taskId', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const state = await ralphLoopService.getState(id, taskId);
+
+    if (!state) {
+      throw new NotFoundError('Ralph Loop');
+    }
+
+    res.json(state);
+  }));
+
+  // Stop a Ralph Loop
+  router.post('/:id/ralph-loop/:taskId/stop', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const state = await ralphLoopService.getState(id, taskId);
+
+    if (!state) {
+      throw new NotFoundError('Ralph Loop');
+    }
+
+    await ralphLoopService.stop(id, taskId);
+    res.json({ success: true });
+  }));
+
+  // Pause a Ralph Loop
+  router.post('/:id/ralph-loop/:taskId/pause', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const state = await ralphLoopService.getState(id, taskId);
+
+    if (!state) {
+      throw new NotFoundError('Ralph Loop');
+    }
+
+    if (state.status === 'paused') {
+      throw new ConflictError('Ralph Loop is already paused');
+    }
+
+    if (state.status !== 'worker_running' && state.status !== 'reviewer_running') {
+      throw new ConflictError('Ralph Loop is not running');
+    }
+
+    await ralphLoopService.pause(id, taskId);
+    res.json({ success: true });
+  }));
+
+  // Resume a paused Ralph Loop
+  router.post('/:id/ralph-loop/:taskId/resume', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const state = await ralphLoopService.getState(id, taskId);
+
+    if (!state) {
+      throw new NotFoundError('Ralph Loop');
+    }
+
+    if (state.status !== 'paused') {
+      throw new ConflictError('Ralph Loop is not paused');
+    }
+
+    await ralphLoopService.resume(id, taskId);
+    res.json({ success: true });
+  }));
+
+  // Delete a Ralph Loop
+  router.delete('/:id/ralph-loop/:taskId', asyncHandler(async (req: Request, res: Response) => {
+    const { ralphLoopService } = deps;
+
+    if (!ralphLoopService) {
+      res.status(503).json({ error: ralphLoopDisabledMessage });
+      return;
+    }
+
+    const id = req.params['id'] as string;
+    const taskId = req.params['taskId'] as string;
+    const project = await projectRepository.findById(id);
+
+    if (!project) {
+      throw new NotFoundError('Project');
+    }
+
+    const state = await ralphLoopService.getState(id, taskId);
+
+    if (!state) {
+      throw new NotFoundError('Ralph Loop');
+    }
+
+    // Stop if running before deleting
+    if (state.status === 'worker_running' || state.status === 'reviewer_running') {
+      await ralphLoopService.stop(id, taskId);
+    }
+
+    // Note: RalphLoopService doesn't have a delete method,
+    // we just stop it and let the repository handle cleanup
+    res.json({ success: true });
+  }));
 
   return router;
 }

@@ -235,6 +235,8 @@ export interface ClaudeAgentConfig {
   sessionId?: string;
   /** If true, use --session-id to create new session. If false, use --resume to resume existing session. */
   isNewSession?: boolean;
+  /** Claude model to use (e.g., 'claude-sonnet-4-20250514') */
+  model?: string;
 }
 
 export class DefaultClaudeAgent implements ClaudeAgent {
@@ -261,6 +263,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   private _sessionId: string | null = null;
   private readonly _configuredSessionId: string | null = null;
   private readonly _isNewSession: boolean = true;
+  private readonly _model: string | undefined;
   private _sessionError: string | null = null;
   private awaitingCompactionSummary = false;
   private lastInputWasCommand = false;
@@ -282,6 +285,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.logger = getLogger('ClaudeAgent').withProject(config.projectId);
     this._configuredSessionId = config.sessionId || null;
     this._isNewSession = config.isNewSession ?? true;
+    this._model = config.model;
   }
 
   get status(): AgentStatus {
@@ -701,6 +705,11 @@ export class DefaultClaudeAgent implements ClaudeAgent {
 
     // Use --print mode for non-interactive piped I/O
     args.push('--print');
+
+    // Add model selection
+    if (this._model) {
+      args.push('--model', this._model);
+    }
 
     // Add permission-related arguments
     this.addPermissionArgs(args);

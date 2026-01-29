@@ -242,16 +242,16 @@
     updateRoadmapSelectionUI();
   }
 
-  function runSelectedRoadmapTasks() {
+  function convertSelectedToTasks() {
     var items = getSelectedRoadmapItems();
 
     if (items.length === 0) {
-      showToast('No items selected', 'error');
+      showToast('Please select items to convert', 'warning');
       return;
     }
 
-    // Generate the prompt
-    var prompt = generateRoadmapTaskPrompt(items);
+    // Generate prompt to convert selected items into tasks
+    var prompt = generateConvertToTasksPrompt(items);
 
     // Close the roadmap modal
     closeModal('modal-roadmap');
@@ -263,30 +263,27 @@
     var project = findProjectById(state.selectedProjectId);
 
     if (project && project.status === 'running') {
-      // Agent is already running, send the message directly
       doSendMessage(prompt);
     } else {
-      // Agent not running, start interactive agent with the prompt
       startInteractiveAgentWithMessage(prompt);
     }
   }
 
-  function generateRoadmapTaskPrompt(items) {
-    var lines = ['Please work on the following roadmap items:\n'];
+  function generateConvertToTasksPrompt(items) {
+    var lines = ['Please convert the following roadmap items into actionable tasks for your todo list:\n'];
 
     items.forEach(function(item, index) {
       if (item.type === 'milestone') {
         lines.push((index + 1) + '. **Milestone**: ' + item.title);
-        lines.push('   Complete all pending tasks in this milestone.\n');
       } else {
-        lines.push((index + 1) + '. **Task**: ' + item.title + '\n');
+        lines.push((index + 1) + '. **Task**: ' + item.title);
       }
     });
 
-    lines.push('\nFor each item, please:');
-    lines.push('1. Implement the required changes');
-    lines.push('2. Test your changes');
-    lines.push('3. Update the ROADMAP.md to mark completed items with [x]');
+    lines.push('\nFor each item:');
+    lines.push('1. Break it down into specific, actionable sub-tasks if needed');
+    lines.push('2. Add these to your todo list using the TodoWrite tool');
+    lines.push('3. Start working on them in order');
 
     return lines.join('\n');
   }
@@ -318,9 +315,9 @@
       updateRoadmapSelectionUI();
     });
 
-    // Run selected tasks button
-    $('#btn-run-selected-roadmap').on('click', function() {
-      runSelectedRoadmapTasks();
+    // Convert to tasks button
+    $('#btn-convert-to-tasks').on('click', function() {
+      convertSelectedToTasks();
     });
 
     // Clear selection button
@@ -335,7 +332,7 @@
     getSelectedItems: getSelectedRoadmapItems,
     updateSelectionUI: updateRoadmapSelectionUI,
     clearSelection: clearRoadmapSelection,
-    runSelectedTasks: runSelectedRoadmapTasks,
+    convertToTasks: convertSelectedToTasks,
     toggleMilestoneExpanded: toggleMilestoneExpanded,
     setupHandlers: setupHandlers
   };

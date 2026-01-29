@@ -15,6 +15,7 @@
   var EscapeUtils = window.EscapeUtils;
   var GitModule = window.GitModule;
   var ShellModule = window.ShellModule;
+  var RalphLoopModule = window.RalphLoopModule;
   var DebugModal = window.DebugModal;
   var FileBrowser = window.FileBrowser;
   var RoadmapModule = window.RoadmapModule;
@@ -1267,6 +1268,7 @@
         $('#input-history-limit').val(settings.historyLimit || 25);
         $('#input-claude-md-max-size').val(settings.claudeMdMaxSizeKB || 50);
         $('#input-desktop-notifications').prop('checked', settings.enableDesktopNotifications || false);
+        $('#input-default-model').val(settings.defaultModel || 'claude-sonnet-4-20250514');
         updatePermissionFieldsState();
 
         // Store settings for templates module
@@ -1381,6 +1383,7 @@
     var claudeMdMaxSizeKB = parseInt($('#input-claude-md-max-size').val(), 10) || 50;
     var enableDesktopNotifications = $('#input-desktop-notifications').is(':checked');
     var appendSystemPrompt = $('#input-append-system-prompt').val() || '';
+    var defaultModel = $('#input-default-model').val() || 'claude-sonnet-4-20250514';
     var settings = {
       maxConcurrentAgents: parseInt($('#input-max-concurrent').val(), 10),
       claudePermissions: {
@@ -1394,7 +1397,8 @@
       sendWithCtrlEnter: newSendWithCtrlEnter,
       historyLimit: historyLimit,
       claudeMdMaxSizeKB: claudeMdMaxSizeKB,
-      enableDesktopNotifications: enableDesktopNotifications
+      enableDesktopNotifications: enableDesktopNotifications,
+      defaultModel: defaultModel
     };
 
     // Request notification permission if enabling notifications
@@ -1447,6 +1451,22 @@
     } else {
       $('#input-hint-image').html('• Paste images with Ctrl+V or ' + attachLink);
     }
+  }
+
+  // ============================================================
+  // Enhanced Loop Settings Functions
+  // ============================================================
+
+
+
+  // Helper function to format large numbers
+  function formatNumber(num) {
+    if (num >= 1000000) {
+      return (num / 1000000).toFixed(1) + 'M';
+    } else if (num >= 1000) {
+      return (num / 1000).toFixed(1) + 'K';
+    }
+    return num.toString();
   }
 
   function setupProjectHandlers() {
@@ -1726,10 +1746,16 @@
 
     // Permission mode handlers are in PermissionModeModule.setupHandlers()
 
+    // Model selector handler
+    $('#project-model-select').on('change', function() {
+      handleProjectModelChange($(this).val() || null);
+    });
+
     // Cancel button handler
     $('#btn-cancel-agent').on('click', function() {
       cancelAgentOperation();
     });
+
 
     // Message form handler
     $('#form-send-message').on('submit', function(e) {
@@ -2243,6 +2269,7 @@
     if (isInteractive) {
       // Interactive mode: hide start button, only show stop when running
       $('#btn-start-agent').addClass('hidden');
+      $('#loop-controls').addClass('hidden');
 
       if (isRunning) {
         $('#btn-stop-agent').removeClass('hidden');
@@ -2250,7 +2277,9 @@
         $('#btn-stop-agent').addClass('hidden');
       }
     } else {
-      // Autonomous mode: show start/stop based on status
+      // Autonomous mode: show basic start/stop buttons (use Ralph Loop for enhanced features)
+      $('#loop-controls').addClass('hidden');
+
       if (isRunning) {
         $('#btn-start-agent').addClass('hidden');
         $('#btn-stop-agent').removeClass('hidden');
@@ -2600,6 +2629,10 @@
       state.git.selectedFile = null;
       // Notify shell module of project change
       ShellModule.onProjectChanged(projectId);
+      // Notify Ralph Loop module of project change
+      if (RalphLoopModule) {
+        RalphLoopModule.onProjectChanged();
+      }
     }
 
     state.selectedProjectId = projectId;
@@ -2708,6 +2741,81 @@
       .done(function(project) {
         state.currentConversationId = project.currentConversationId || null;
         // Stats will be updated when loadConversationHistory completes
+      });
+
+    // Load project model configuration
+    loadProjectModel(projectId);
+  }
+
+  function loadProjectModel(projectId) {
+    api.getProjectModel(projectId)
+      .done(function(data) {
+        // data = { projectModel, effectiveModel, globalDefault }
+        $('#project-model-select').val(data.projectModel || '');
+        state.currentProjectModel = data.projectModel;
+        state.effectiveModel = data.effectiveModel;
+        state.globalDefaultModel = data.globalDefault;
+        updateModelSelectorTitle(data);
+      })
+      .fail(function() {
+        // On failure, reset to default
+        $('#project-model-select').val('');
+        state.currentProjectModel = null;
+      });
+  }
+
+  function updateModelSelectorTitle(modelData) {
+    var title = 'Select Claude model for this project';
+
+    if (modelData.projectModel) {
+      title = 'Using: ' + getModelDisplayName(modelData.projectModel) + ' (project override)';
+    } else {
+      title = 'Using: ' + getModelDisplayName(modelData.globalDefault) + ' (global default)';
+    }
+
+    $('#model-selector').attr('title', title);
+  }
+
+  function getModelDisplayName(modelId) {
+    var displayNames = {
+      'claude-sonnet-4-20250514': 'Sonnet 4',
+      'claude-opus-4-20250514': 'Opus 4'
+    };
+
+    return displayNames[modelId] || modelId;
+  }
+
+  function handleProjectModelChange(model) {
+    var projectId = state.selectedProjectId;
+
+    if (!projectId) return;
+
+    api.setProjectModel(projectId, model)
+      .done(function(response) {
+        state.currentProjectModel = model;
+        state.effectiveModel = response.effectiveModel || model || state.globalDefaultModel;
+
+        var displayName = model ? getModelDisplayName(model) : 'Default';
+        showToast('Model changed to ' + displayName, 'success');
+
+        updateModelSelectorTitle({
+          projectModel: model,
+          effectiveModel: state.effectiveModel,
+          globalDefault: state.globalDefaultModel
+        });
+
+        // Note: If an agent is running, it will continue with the old model
+        // until it is restarted. The backend handles restart if needed.
+        var project = findProjectById(projectId);
+
+        if (project && project.status === 'running') {
+          showToast('Agent will use the new model after restart', 'info');
+        }
+      })
+      .fail(function(xhr) {
+        // Revert the selector to the previous value
+        $('#project-model-select').val(state.currentProjectModel || '');
+        showErrorToast(xhr, 'Failed to change model');
       });
   }
 
@@ -3328,6 +3436,17 @@
       case 'shell_error':
         ShellModule.handleShellError(message.data);
         break;
+      case 'ralph_loop_status':
+      case 'ralph_loop_iteration':
+      case 'ralph_loop_output':
+      case 'ralph_loop_complete':
+      case 'ralph_loop_worker_complete':
+      case 'ralph_loop_reviewer_complete':
+      case 'ralph_loop_error':
+        if (RalphLoopModule) {
+          RalphLoopModule.handleWebSocketMessage(message.type, message.data);
+        }
+        break;
     }
   }
 
@@ -3619,6 +3738,7 @@
     }
   }
 
+
   // Tab switching functions
   function switchTab(tabName) {
     state.activeTab = tabName;
@@ -3659,6 +3779,11 @@
     if (tabName === 'shell') {
       ShellModule.onTabActivated();
     }
+
+    // If switching to ralph-loop tab, activate the module
+    if (tabName === 'ralph-loop' && RalphLoopModule) {
+      RalphLoopModule.onTabActivated();
+    }
   }
 
   /**
@@ -3677,6 +3802,8 @@
       GitModule.loadGitStatus();
     } else if (state.activeTab === 'shell') {
       ShellModule.onTabActivated();
+    } else if (state.activeTab === 'ralph-loop' && RalphLoopModule) {
+      RalphLoopModule.onTabActivated();
     }
   }
 
@@ -3748,6 +3875,16 @@
       showToast: showToast,
       showErrorToast: showErrorToast
     });
+
+    // Initialize RalphLoopModule with dependencies
+    if (RalphLoopModule) {
+      RalphLoopModule.init({
+        state: state,
+        escapeHtml: EscapeUtils.escapeHtml,
+        showToast: showToast,
+        ApiClient: api
+      });
+    }
 
     // Initialize DebugModal with dependencies
     DebugModal.init({

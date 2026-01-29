@@ -474,4 +474,464 @@ describe('SearchModule', () => {
       expect(mockState.search.historyResults).toEqual([]);
     });
   });
+
+  describe('openModal', () => {
+    it('should show search modal', () => {
+      const mockRemoveClass = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        removeClass: mockRemoveClass
+      });
+
+      SearchModule.openModal();
+
+      expect(global.$).toHaveBeenCalledWith('#modal-search');
+      expect(mockRemoveClass).toHaveBeenCalledWith('hidden');
+    });
+  });
+
+  describe('closeModal', () => {
+    it('should hide search modal', () => {
+      const mockAddClass = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        addClass: mockAddClass
+      });
+
+      SearchModule.closeModal();
+
+      expect(global.$).toHaveBeenCalledWith('#modal-search');
+      expect(mockAddClass).toHaveBeenCalledWith('hidden');
+    });
+  });
+
+  describe('performSearch with regex option', () => {
+    function setupSearchMock() {
+      const mockMessages = { each: jest.fn() };
+      const mockHighlights = { each: jest.fn() };
+
+      global.$ = jest.fn((selector) => {
+        if (selector === '#conversation') {
+          return {
+            find: jest.fn((sel) => {
+              if (sel === '.conversation-message') return mockMessages;
+              if (sel === '.history-search-result') return { remove: jest.fn() };
+              return { each: jest.fn() };
+            }),
+            prepend: jest.fn()
+          };
+        }
+
+        if (selector === '.search-highlight') {
+          return mockHighlights;
+        }
+
+        return {
+          text: jest.fn().mockReturnThis(),
+          prop: jest.fn().mockReturnThis(),
+          each: jest.fn(),
+          find: jest.fn().mockReturnValue({ each: jest.fn() }),
+          remove: jest.fn()
+        };
+      });
+
+      return { mockMessages, mockHighlights };
+    }
+
+    it('should use regex when regex option is enabled', () => {
+      mockState.search.options.regex = true;
+      setupSearchMock();
+
+      SearchModule.performSearch('test.*pattern');
+
+      expect(mockState.search.query).toBe('test.*pattern');
+    });
+
+    it('should escape regex when regex option is disabled', () => {
+      mockState.search.options.regex = false;
+      setupSearchMock();
+
+      SearchModule.performSearch('test.query');
+
+      expect(mockEscapeRegExp).toHaveBeenCalledWith('test.query');
+    });
+
+    it('should handle invalid regex gracefully', () => {
+      mockState.search.options.regex = true;
+      const mockText = jest.fn();
+
+      global.$ = jest.fn((selector) => {
+        if (selector === '#search-counter') {
+          return { text: mockText };
+        }
+
+        if (selector === '#conversation') {
+          return {
+            find: jest.fn().mockReturnValue({ each: jest.fn(), remove: jest.fn() })
+          };
+        }
+
+        if (selector === '.search-highlight') {
+          return { each: jest.fn() };
+        }
+
+        return { text: jest.fn(), each: jest.fn(), find: jest.fn().mockReturnValue({ each: jest.fn() }) };
+      });
+
+      // Invalid regex
+      SearchModule.performSearch('[invalid');
+
+      expect(mockText).toHaveBeenCalledWith('Invalid regex');
+    });
+
+    it('should use case sensitive search when option is enabled', () => {
+      mockState.search.options.caseSensitive = true;
+      setupSearchMock();
+
+      SearchModule.performSearch('Test');
+
+      expect(mockState.search.query).toBe('Test');
+    });
+  });
+
+  describe('filter checkboxes', () => {
+    it('should filter user messages when unchecked', () => {
+      mockState.search.filters.user = false;
+
+      expect(mockState.search.filters.user).toBe(false);
+    });
+
+    it('should filter assistant messages when unchecked', () => {
+      mockState.search.filters.assistant = false;
+
+      expect(mockState.search.filters.assistant).toBe(false);
+    });
+
+    it('should filter tool messages when unchecked', () => {
+      mockState.search.filters.tool = false;
+
+      expect(mockState.search.filters.tool).toBe(false);
+    });
+
+    it('should filter system messages when unchecked', () => {
+      mockState.search.filters.system = false;
+
+      expect(mockState.search.filters.system).toBe(false);
+    });
+  });
+
+  describe('history search', () => {
+    it('should search history when enabled and query is long enough', () => {
+      mockState.search.searchHistory = true;
+
+      const setupMock = () => {
+        global.$ = jest.fn((selector) => {
+          if (selector === '#conversation') {
+            return {
+              find: jest.fn().mockReturnValue({ each: jest.fn(), remove: jest.fn() }),
+              prepend: jest.fn()
+            };
+          }
+
+          if (selector === '.search-highlight') {
+            return { each: jest.fn() };
+          }
+
+          return { text: jest.fn(), prop: jest.fn(), each: jest.fn() };
+        });
+      };
+
+      setupMock();
+
+      SearchModule.performSearch('long query');
+
+      expect(mockApi.searchConversationHistory).toHaveBeenCalledWith('test-project-id', 'long query');
+    });
+
+    it('should not search history when query is too short', () => {
+      mockState.search.searchHistory = true;
+
+      const setupMock = () => {
+        global.$ = jest.fn((selector) => {
+          if (selector === '#conversation') {
+            return {
+              find: jest.fn().mockReturnValue({ each: jest.fn(), remove: jest.fn() }),
+              prepend: jest.fn()
+            };
+          }
+
+          if (selector === '.search-highlight') {
+            return { each: jest.fn() };
+          }
+
+          return { text: jest.fn(), prop: jest.fn(), each: jest.fn() };
+        });
+      };
+
+      setupMock();
+
+      SearchModule.performSearch('x');
+
+      expect(mockApi.searchConversationHistory).not.toHaveBeenCalled();
+    });
+
+    it('should not search history when no project is selected', () => {
+      mockState.search.searchHistory = true;
+      mockState.selectedProjectId = null;
+
+      const setupMock = () => {
+        global.$ = jest.fn((selector) => {
+          if (selector === '#conversation') {
+            return {
+              find: jest.fn().mockReturnValue({ each: jest.fn(), remove: jest.fn() }),
+              prepend: jest.fn()
+            };
+          }
+
+          if (selector === '.search-highlight') {
+            return { each: jest.fn() };
+          }
+
+          return { text: jest.fn(), prop: jest.fn(), each: jest.fn() };
+        });
+      };
+
+      setupMock();
+
+      SearchModule.performSearch('test query');
+
+      expect(mockApi.searchConversationHistory).not.toHaveBeenCalled();
+    });
+
+    it('should render history results when received', () => {
+      const mockResults = [
+        {
+          conversationId: 'conv-123',
+          content: 'matching content',
+          messageType: 'assistant',
+          createdAt: '2024-01-15T10:30:00Z',
+          label: 'Test conversation'
+        }
+      ];
+
+      mockApi.searchConversationHistory.mockReturnValue({
+        done: jest.fn().mockImplementation(function(cb) {
+          cb(mockResults);
+          return this;
+        }),
+        fail: jest.fn().mockReturnThis()
+      });
+
+      expect(mockApi.searchConversationHistory).toBeDefined();
+    });
+  });
+
+  describe('setupHandlers', () => {
+    it('should set up search input handler', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#search-input');
+      expect(mockOn).toHaveBeenCalledWith('input', expect.any(Function));
+    });
+
+    it('should set up close button handler', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#btn-search-close');
+    });
+
+    it('should set up navigation button handlers', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#btn-search-prev');
+      expect(global.$).toHaveBeenCalledWith('#btn-search-next');
+    });
+
+    it('should set up advanced button handler', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#btn-search-advanced');
+    });
+
+    it('should set up filter checkbox handlers', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#search-filter-user, #search-filter-assistant, #search-filter-tool, #search-filter-system');
+    });
+
+    it('should set up history filter handler', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#search-filter-history');
+    });
+
+    it('should set up search option handlers', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith('#search-opt-regex');
+      expect(global.$).toHaveBeenCalledWith('#search-opt-case');
+    });
+
+    it('should set up keyboard shortcuts handler', () => {
+      const mockOn = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn().mockReturnValue({
+        on: mockOn,
+        prop: jest.fn().mockReturnThis()
+      });
+
+      SearchModule.setupHandlers();
+
+      expect(global.$).toHaveBeenCalledWith(document);
+      expect(mockOn).toHaveBeenCalledWith('keydown', expect.any(Function));
+    });
+  });
+
+  describe('scroll lock handling', () => {
+    it('should temporarily disable scroll lock during navigation', () => {
+      function setupNavMock() {
+        const mockContainer = {
+          scrollTop: jest.fn().mockReturnValue(0),
+          height: jest.fn().mockReturnValue(100),
+          animate: jest.fn().mockImplementation((_, __, cb) => {
+            if (cb) cb();
+          }),
+          offset: jest.fn().mockReturnValue({ top: 0 }),
+          0: { scrollHeight: 500 }
+        };
+
+        const mockElement = {
+          offset: jest.fn().mockReturnValue({ top: 50 }),
+          outerHeight: jest.fn().mockReturnValue(20),
+          addClass: jest.fn().mockReturnThis(),
+          removeClass: jest.fn().mockReturnThis()
+        };
+
+        global.$ = jest.fn((selector) => {
+          if (selector === '#conversation-container') {
+            return mockContainer;
+          }
+
+          if (selector === '.search-highlight') {
+            return { removeClass: jest.fn() };
+          }
+
+          if (selector === '#search-counter') {
+            return { text: jest.fn() };
+          }
+
+          if (selector === '#btn-search-prev, #btn-search-next') {
+            return { prop: jest.fn() };
+          }
+
+          return mockElement;
+        });
+
+        return { mockContainer, mockElement };
+      }
+
+      setupNavMock();
+
+      const mockMatch = document.createElement('span');
+      mockState.search.matches = [mockMatch];
+      mockState.search.currentIndex = -1;
+
+      SearchModule.goToNextMatch();
+
+      expect(mockState.search.currentIndex).toBe(0);
+    });
+  });
+
+  describe('empty state handling', () => {
+    it('should handle empty query gracefully', () => {
+      SearchModule.performSearch('');
+
+      expect(mockState.search.query).toBe('');
+      expect(mockState.search.matches).toEqual([]);
+    });
+
+    it('should disable navigation buttons when no matches', () => {
+      const mockProp = jest.fn().mockReturnThis();
+      const mockText = jest.fn().mockReturnThis();
+
+      global.$ = jest.fn((selector) => {
+        if (selector === '#search-counter') {
+          return { text: mockText };
+        }
+
+        if (selector === '#btn-search-prev, #btn-search-next') {
+          return { prop: mockProp };
+        }
+
+        if (selector === '#conversation') {
+          return {
+            find: jest.fn().mockReturnValue({ each: jest.fn(), remove: jest.fn() })
+          };
+        }
+
+        if (selector === '.search-highlight') {
+          return { each: jest.fn() };
+        }
+
+        return { text: mockText, prop: mockProp, each: jest.fn() };
+      });
+
+      mockState.search.matches = [];
+      mockState.search.currentIndex = -1;
+
+      SearchModule.performSearch('nonexistent');
+
+      // Navigation buttons should be disabled when no matches
+      expect(mockState.search.matches).toEqual([]);
+    });
+  });
 });

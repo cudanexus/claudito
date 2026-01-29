@@ -100,7 +100,7 @@
    * Open the template selector modal
    */
   function openSelector() {
-    var templates = state.settings?.promptTemplates || [];
+    var templates = (state && state.settings && state.settings.promptTemplates) || [];
 
     if (templates.length === 0) {
       showToast('No templates available. Add templates in Settings.', 'info');
@@ -111,6 +111,11 @@
     var html = '<div class="py-1">';
 
     templates.forEach(function(template) {
+      // Skip invalid template objects
+      if (!template || !template.id || !template.name) {
+        return;
+      }
+
       html += '<div class="template-selector-item px-3 py-2 hover:bg-gray-700 cursor-pointer" data-id="' + escapeHtml(template.id) + '">' +
         '<div class="text-sm text-white">' + escapeHtml(template.name) + '</div>' +
         (template.description ? '<div class="text-xs text-gray-400 mt-0.5">' + escapeHtml(template.description) + '</div>' : '') +
@@ -285,7 +290,7 @@
    * Render templates list in settings tab
    */
   function renderSettingsTab() {
-    var templates = state.settings?.promptTemplates || [];
+    var templates = (state && state.settings && state.settings.promptTemplates) || [];
     var $container = $('#templates-list');
 
     if (templates.length === 0) {
@@ -296,6 +301,11 @@
     var html = '';
 
     templates.forEach(function(template, index) {
+      // Skip invalid template objects
+      if (!template || !template.id || !template.name) {
+        return;
+      }
+
       html += '<div class="template-list-item flex items-center justify-between p-2 bg-gray-700 rounded" data-id="' + escapeHtml(template.id) + '">' +
         '<div class="flex-1 min-w-0">' +
         '<div class="text-sm text-white truncate">' + escapeHtml(template.name) + '</div>' +

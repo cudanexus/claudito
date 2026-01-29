@@ -71,6 +71,12 @@ export const DEFAULT_TEST_SETTINGS: GlobalSettings = {
     noSessionPersistence: false,
   },
   promptTemplates: [],
+  ralphLoop: {
+    defaultMaxTurns: 5,
+    defaultWorkerModel: 'claude-sonnet-4-20250514',
+    defaultReviewerModel: 'claude-sonnet-4-20250514',
+  },
+  defaultModel: 'claude-sonnet-4-20250514',
 };
 
 export const DEFAULT_CLAUDE_PERMISSIONS: ClaudePermissions = {
@@ -110,6 +116,7 @@ export const sampleProject: ProjectStatus = {
   currentItem: null,
   lastContextUsage: null,
   permissionOverrides: null,
+  modelOverride: null,
   createdAt: '2024-01-01T00:00:00.000Z',
   updatedAt: '2024-01-01T00:00:00.000Z',
 };
@@ -263,6 +270,7 @@ export function createMockProjectRepository(
         currentItem: null,
         lastContextUsage: null,
         permissionOverrides: null,
+        modelOverride: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -314,6 +322,14 @@ export function createMockProjectRepository(
 
       if (!project) return Promise.resolve(null);
       project.permissionOverrides = overrides;
+      project.updatedAt = new Date().toISOString();
+      return Promise.resolve({ ...project });
+    }),
+    updateModelOverride: jest.fn().mockImplementation((id: string, model: string | null) => {
+      const project = projects.get(id);
+
+      if (!project) return Promise.resolve(null);
+      project.modelOverride = model;
       project.updatedAt = new Date().toISOString();
       return Promise.resolve({ ...project });
     }),
@@ -811,6 +827,7 @@ export function createMockProjectService(): jest.Mocked<ProjectService> {
         currentItem: null,
         lastContextUsage: null,
         permissionOverrides: null,
+        modelOverride: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -888,7 +905,11 @@ export function createMockAgentManager(): jest.Mocked<AgentManager> {
     setMaxConcurrentAgents: jest.fn(),
     startAutonomousLoop: jest.fn().mockImplementation((projectId: string) => {
       runningAgents.set(projectId, { mode: 'autonomous', status: 'running' });
-      loopStates.set(projectId, { isLooping: true, currentMilestone: null, currentConversationId: null });
+      loopStates.set(projectId, {
+        isLooping: true,
+        currentMilestone: null,
+        currentConversationId: null,
+      });
       return Promise.resolve();
     }),
     stopAutonomousLoop: jest.fn().mockImplementation((projectId: string) => {
@@ -1016,4 +1037,328 @@ export function createTestMilestone(
 
 export function createTestTask(title: string, completed = false): RoadmapTask {
   return { title, completed };
+}
+
+// ============================================================================
+// Ralph Loop Mocks
+// ============================================================================
+
+import {
+  RalphLoopState,
+  RalphLoopConfig,
+  RalphLoopRepository,
+  RalphLoopService,
+  RalphLoopEvents,
+  IterationSummary,
+  ReviewerFeedback,
+  ContextInitializer,
+} from '../../../src/services/ralph-loop/types';
+import { RalphLoopFileSystem } from '../../../src/repositories/ralph-loop';
+
+export const sampleRalphLoopConfig: RalphLoopConfig = {
+  maxTurns: 5,
+  workerModel: 'claude-sonnet-4-20250514',
+  reviewerModel: 'claude-sonnet-4-20250514',
+  taskDescription: 'Implement a test feature',
+};
+
+export const sampleRalphLoopState: RalphLoopState = {
+  taskId: 'task-123',
+  projectId: 'project-456',
+  config: sampleRalphLoopConfig,
+  currentIteration: 0,
+  status: 'idle',
+  summaries: [],
+  feedback: [],
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+};
+
+export const sampleIterationSummary: IterationSummary = {
+  iterationNumber: 1,
+  timestamp: '2024-01-01T00:00:00.000Z',
+  workerOutput: 'Implemented feature X',
+  filesModified: ['src/feature.ts'],
+  tokensUsed: 1000,
+  durationMs: 5000,
+};
+
+export const sampleReviewerFeedback: ReviewerFeedback = {
+  iterationNumber: 1,
+  timestamp: '2024-01-01T00:00:00.000Z',
+  decision: 'needs_changes',
+  feedback: 'Good progress, but needs more tests',
+  specificIssues: ['Missing test for edge case'],
+  suggestedImprovements: ['Add unit tests'],
+};
+
+export function createMockRalphLoopFileSystem(): jest.Mocked<RalphLoopFileSystem> {
+  const files = new Map<string, string>();
+  const directories = new Set<string>();
+
+  return {
+    readFile: jest.fn().mockImplementation((filePath: string) => {
+      const content = files.get(filePath);
+
+      if (content === undefined) {
+        return Promise.reject(new Error(`File not found: ${filePath}`));
+      }
+
+      return Promise.resolve(content);
+    }),
+    writeFile: jest.fn().mockImplementation((filePath: string, data: string) => {
+      files.set(filePath, data);
+      return Promise.resolve();
+    }),
+    exists: jest.fn().mockImplementation((filePath: string) => {
+      return Promise.resolve(files.has(filePath) || directories.has(filePath));
+    }),
+    mkdir: jest.fn().mockImplementation((dirPath: string) => {
+      directories.add(dirPath);
+      return Promise.resolve();
+    }),
+    readdir: jest.fn().mockImplementation((dirPath: string) => {
+      const entries: string[] = [];
+
+      for (const filePath of files.keys()) {
+        if (filePath.startsWith(dirPath + '/') || filePath.startsWith(dirPath + '\\')) {
+          const relativePath = filePath.slice(dirPath.length + 1);
+          const firstPart = relativePath.split(/[/\\]/)[0];
+
+          if (firstPart && !entries.includes(firstPart)) {
+            entries.push(firstPart);
+          }
+        }
+      }
+
+      for (const dir of directories) {
+        if (dir.startsWith(dirPath + '/') || dir.startsWith(dirPath + '\\')) {
+          const relativePath = dir.slice(dirPath.length + 1);
+          const firstPart = relativePath.split(/[/\\]/)[0];
+
+          if (firstPart && !entries.includes(firstPart)) {
+            entries.push(firstPart);
+          }
+        }
+      }
+
+      return Promise.resolve(entries);
+    }),
+    unlink: jest.fn().mockImplementation((filePath: string) => {
+      files.delete(filePath);
+      return Promise.resolve();
+    }),
+    rmdir: jest.fn().mockImplementation((dirPath: string) => {
+      directories.delete(dirPath);
+
+      for (const filePath of files.keys()) {
+        if (filePath.startsWith(dirPath)) {
+          files.delete(filePath);
+        }
+      }
+
+      return Promise.resolve();
+    }),
+  };
+}
+
+export function createMockRalphLoopRepository(): jest.Mocked<RalphLoopRepository> {
+  const states = new Map<string, RalphLoopState>();
+
+  const getCacheKey = (projectId: string, taskId: string): string => `${projectId}:${taskId}`;
+
+  return {
+    create: jest.fn().mockImplementation((state: Omit<RalphLoopState, 'createdAt' | 'updatedAt'>) => {
+      const now = new Date().toISOString();
+      const fullState: RalphLoopState = {
+        ...state,
+        createdAt: now,
+        updatedAt: now,
+      };
+      states.set(getCacheKey(state.projectId, state.taskId), fullState);
+      return Promise.resolve({ ...fullState });
+    }),
+    findById: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      const state = states.get(getCacheKey(projectId, taskId));
+      return Promise.resolve(state ? { ...state } : null);
+    }),
+    findByProject: jest.fn().mockImplementation((projectId: string) => {
+      const projectStates: RalphLoopState[] = [];
+
+      for (const [key, state] of states) {
+        if (key.startsWith(`${projectId}:`)) {
+          projectStates.push({ ...state });
+        }
+      }
+
+      return Promise.resolve(
+        projectStates.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      );
+    }),
+    update: jest.fn().mockImplementation((projectId: string, taskId: string, updates: Partial<RalphLoopState>) => {
+      const key = getCacheKey(projectId, taskId);
+      const existing = states.get(key);
+
+      if (!existing) {
+        return Promise.resolve(null);
+      }
+
+      const updated: RalphLoopState = {
+        ...existing,
+        ...updates,
+        taskId: existing.taskId,
+        projectId: existing.projectId,
+        createdAt: existing.createdAt,
+        updatedAt: new Date().toISOString(),
+      };
+      states.set(key, updated);
+      return Promise.resolve({ ...updated });
+    }),
+    addSummary: jest.fn().mockImplementation((projectId: string, taskId: string, summary: IterationSummary) => {
+      const key = getCacheKey(projectId, taskId);
+      const existing = states.get(key);
+
+      if (existing) {
+        existing.summaries = [...existing.summaries, summary];
+        existing.updatedAt = new Date().toISOString();
+      }
+
+      return Promise.resolve();
+    }),
+    addFeedback: jest.fn().mockImplementation((projectId: string, taskId: string, feedback: ReviewerFeedback) => {
+      const key = getCacheKey(projectId, taskId);
+      const existing = states.get(key);
+
+      if (existing) {
+        existing.feedback = [...existing.feedback, feedback];
+        existing.updatedAt = new Date().toISOString();
+      }
+
+      return Promise.resolve();
+    }),
+    delete: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      const key = getCacheKey(projectId, taskId);
+      const existed = states.has(key);
+      states.delete(key);
+      return Promise.resolve(existed);
+    }),
+    flush: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+export function createMockRalphLoopService(): jest.Mocked<RalphLoopService> {
+  const emitter = new EventEmitter();
+  const activeLoops = new Map<string, RalphLoopState>();
+
+  const getCacheKey = (projectId: string, taskId: string): string => `${projectId}:${taskId}`;
+
+  return {
+    start: jest.fn().mockImplementation((projectId: string, config: RalphLoopConfig) => {
+      const taskId = `task-${Date.now()}`;
+      const now = new Date().toISOString();
+      const state: RalphLoopState = {
+        taskId,
+        projectId,
+        config,
+        currentIteration: 0,
+        status: 'idle',
+        summaries: [],
+        feedback: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      activeLoops.set(getCacheKey(projectId, taskId), state);
+      return Promise.resolve(state);
+    }),
+    stop: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      activeLoops.delete(getCacheKey(projectId, taskId));
+      return Promise.resolve();
+    }),
+    pause: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      const key = getCacheKey(projectId, taskId);
+      const state = activeLoops.get(key);
+
+      if (state) {
+        state.status = 'paused';
+      }
+
+      return Promise.resolve();
+    }),
+    resume: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      const key = getCacheKey(projectId, taskId);
+      const state = activeLoops.get(key);
+
+      if (state) {
+        state.status = 'idle';
+      }
+
+      return Promise.resolve();
+    }),
+    getState: jest.fn().mockImplementation((projectId: string, taskId: string) => {
+      const state = activeLoops.get(getCacheKey(projectId, taskId));
+      return Promise.resolve(state ? { ...state } : null);
+    }),
+    listByProject: jest.fn().mockImplementation((projectId: string) => {
+      const projectStates: RalphLoopState[] = [];
+
+      for (const [key, state] of activeLoops) {
+        if (key.startsWith(`${projectId}:`)) {
+          projectStates.push({ ...state });
+        }
+      }
+
+      return Promise.resolve(projectStates);
+    }),
+    on: jest.fn().mockImplementation(<K extends keyof RalphLoopEvents>(
+      event: K,
+      listener: RalphLoopEvents[K]
+    ) => {
+      emitter.on(event, listener);
+    }),
+    off: jest.fn().mockImplementation(<K extends keyof RalphLoopEvents>(
+      event: K,
+      listener: RalphLoopEvents[K]
+    ) => {
+      emitter.off(event, listener);
+    }),
+  };
+}
+
+export function createMockContextInitializer(): jest.Mocked<ContextInitializer> {
+  return {
+    buildWorkerContext: jest.fn().mockReturnValue('Worker context'),
+    buildReviewerContext: jest.fn().mockReturnValue('Reviewer context'),
+  };
+}
+
+export function createTestRalphLoopConfig(overrides?: Partial<RalphLoopConfig>): RalphLoopConfig {
+  return {
+    ...sampleRalphLoopConfig,
+    ...overrides,
+  };
+}
+
+export function createTestRalphLoopState(overrides?: Partial<RalphLoopState>): RalphLoopState {
+  const now = new Date().toISOString();
+  return {
+    ...sampleRalphLoopState,
+    ...overrides,
+    taskId: overrides?.taskId || `task-${Date.now()}`,
+    createdAt: overrides?.createdAt || now,
+    updatedAt: overrides?.updatedAt || now,
+  };
+}
+
+export function createTestIterationSummary(overrides?: Partial<IterationSummary>): IterationSummary {
+  return {
+    ...sampleIterationSummary,
+    ...overrides,
+  };
+}
+
+export function createTestReviewerFeedback(overrides?: Partial<ReviewerFeedback>): ReviewerFeedback {
+  return {
+    ...sampleReviewerFeedback,
+    ...overrides,
+  };
 }

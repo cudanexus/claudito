@@ -614,6 +614,48 @@ describe('FileProjectRepository', () => {
     });
   });
 
+  describe('updateModelOverride', () => {
+    const testModel = 'claude-opus-4-20250514';
+
+    it('should return null for non-existent project', async () => {
+      const result = await repository.updateModelOverride('non-existent', testModel);
+      expect(result).toBeNull();
+    });
+
+    it('should update model override', async () => {
+      const created = await repository.create({ name: 'Test', path: '/test' });
+
+      const updated = await repository.updateModelOverride(created.id, testModel);
+
+      expect(updated).toBeDefined();
+      expect(updated!.modelOverride).toEqual(testModel);
+    });
+
+    it('should allow setting model override to null', async () => {
+      const created = await repository.create({ name: 'Test', path: '/test' });
+      await repository.updateModelOverride(created.id, testModel);
+
+      const updated = await repository.updateModelOverride(created.id, null);
+
+      expect(updated!.modelOverride).toBeNull();
+    });
+
+    it('should persist model override change', async () => {
+      const created = await repository.create({ name: 'Test', path: '/test' });
+      await repository.updateModelOverride(created.id, testModel);
+
+      const found = await repository.findById(created.id);
+
+      expect(found!.modelOverride).toEqual(testModel);
+    });
+
+    it('should initialize modelOverride to null on create', async () => {
+      const created = await repository.create({ name: 'Test', path: '/test' });
+
+      expect(created.modelOverride).toBeNull();
+    });
+  });
+
   describe('loadStatus edge cases', () => {
     it('should return null when status file is corrupted', async () => {
       const created = await repository.create({ name: 'Test', path: '/test' });
@@ -635,6 +677,70 @@ describe('FileProjectRepository', () => {
 
       const newRepo = new FileProjectRepository(dataDir, mockFs);
       const found = await newRepo.findById('test_id');
+
+      expect(found).toBeNull();
+    });
+  });
+
+  describe('backward compatibility migration', () => {
+    it('should migrate from old location when path is missing in index', async () => {
+      // Set up an old-style entry (no path in index)
+      const projectId = 'old_project';
+      const oldStatusPath = normalizePath(path.join(projectsDir, projectId, 'status.json'));
+      const oldStatus: ProjectStatus = {
+        id: projectId,
+        name: 'Old Project',
+        path: '/migrated/project',
+        status: 'stopped',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nextItem: null,
+        currentItem: null,
+        currentConversationId: null,
+        lastContextUsage: null,
+        permissionOverrides: null,
+        modelOverride: null,
+      };
+
+      // Set up old-style index (no path field)
+      const indexContent = JSON.stringify([{ id: projectId, name: 'Old Project' }]);
+      mockFs.files.set(indexPath, indexContent);
+      mockFs.dirs.add(normalizePath(path.join(projectsDir, projectId)));
+      mockFs.files.set(oldStatusPath, JSON.stringify(oldStatus));
+
+      const newRepo = new FileProjectRepository(dataDir, mockFs);
+      const found = await newRepo.findById(projectId);
+
+      expect(found).toBeDefined();
+      expect(found!.name).toBe('Old Project');
+      expect(found!.path).toBe('/migrated/project');
+    });
+
+    it('should return null for old entry with missing status file', async () => {
+      // Set up an old-style entry (no path in index) but no status file
+      const projectId = 'orphan_project';
+      const indexContent = JSON.stringify([{ id: projectId, name: 'Orphan' }]);
+      mockFs.files.set(indexPath, indexContent);
+      mockFs.dirs.add(normalizePath(path.join(projectsDir, projectId)));
+      // Note: no status file
+
+      const newRepo = new FileProjectRepository(dataDir, mockFs);
+      const found = await newRepo.findById(projectId);
+
+      expect(found).toBeNull();
+    });
+
+    it('should return null for old entry with corrupted status file', async () => {
+      // Set up an old-style entry with corrupted status
+      const projectId = 'corrupt_project';
+      const oldStatusPath = normalizePath(path.join(projectsDir, projectId, 'status.json'));
+      const indexContent = JSON.stringify([{ id: projectId, name: 'Corrupt' }]);
+      mockFs.files.set(indexPath, indexContent);
+      mockFs.dirs.add(normalizePath(path.join(projectsDir, projectId)));
+      mockFs.files.set(oldStatusPath, 'not valid json');
+
+      const newRepo = new FileProjectRepository(dataDir, mockFs);
+      const found = await newRepo.findById(projectId);
 
       expect(found).toBeNull();
     });

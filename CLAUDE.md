@@ -1,6 +1,6 @@
 # Claudito - Project Context
 
-Claude Code autonomous agent manager - TypeScript HTTP server with jQuery + Tailwind.css UI.
+Claude Code intelligent agent manager - TypeScript HTTP server with jQuery + Tailwind.css UI. Features Ralph Loop iterative development pattern and roadmap-based automation.
 
 ## Project Structure
 
@@ -66,6 +66,7 @@ conversations/
 - `GET /api/agents/status` - Get agent resource status
 - `GET /api/settings` - Get global settings
 - `PUT /api/settings` - Update global settings
+- `GET /api/settings/models` - Get available Claude models
 - `GET /api/fs/drives` - List available drives
 - `GET /api/fs/browse?path=` - List directory contents (directories only)
 - `GET /api/fs/browse-with-files?path=` - List directory with files (includes isEditable flag)
@@ -102,7 +103,16 @@ conversations/
 - `PUT /api/projects/:id/claude-files` - Save CLAUDE.md file (body: {filePath, content})
 - `GET /api/projects/:id/permissions` - Get project permission overrides
 - `PUT /api/projects/:id/permissions` - Update project permission overrides
+- `GET /api/projects/:id/model` - Get project model configuration
+- `PUT /api/projects/:id/model` - Update project model override (body: {model})
 - `GET /api/projects/:id/optimizations` - Get project optimization suggestions (CLAUDE.md, ROADMAP.md)
+- `POST /api/projects/:id/ralph-loop/start` - Start Ralph Loop (body: {taskDescription, maxTurns?, workerModel?, reviewerModel?})
+- `POST /api/projects/:id/ralph-loop/:taskId/stop` - Stop Ralph Loop
+- `POST /api/projects/:id/ralph-loop/:taskId/pause` - Pause Ralph Loop
+- `POST /api/projects/:id/ralph-loop/:taskId/resume` - Resume Ralph Loop
+- `GET /api/projects/:id/ralph-loop` - List all Ralph Loops for project
+- `GET /api/projects/:id/ralph-loop/:taskId` - Get Ralph Loop state
+- `DELETE /api/projects/:id/ralph-loop/:taskId` - Delete Ralph Loop
 
 ## WebSocket Messages
 
@@ -113,10 +123,26 @@ conversations/
 - `queue_change` - Queue status updates
 - `roadmap_message` - Real-time roadmap generation output
 - `session_recovery` - Session couldn't be resumed, new conversation created
+- `ralph_loop_status` - Ralph Loop status changes (idle/worker_running/reviewer_running/completed/failed/paused)
+- `ralph_loop_iteration` - Ralph Loop iteration started
+- `ralph_loop_output` - Ralph Loop real-time worker/reviewer output
+- `ralph_loop_complete` - Ralph Loop finished (approved/max_turns_reached/critical_failure)
+- `ralph_loop_worker_complete` - Worker iteration completed
+- `ralph_loop_reviewer_complete` - Reviewer iteration completed
+- `ralph_loop_error` - Ralph Loop error occurred
 
-## Autonomous Loop
+## Automated Development Systems
 
-Agent manager runs autonomous loop that:
+### Ralph Loop (Primary)
+Ralph Loop implements Geoffrey Huntley's "Ralph Wiggum technique" - an iterative worker/reviewer pattern:
+1. **Worker Phase**: Executes task with fresh context each iteration
+2. **Reviewer Phase**: Reviews worker output and provides structured feedback
+3. **Decision**: Approve (complete), reject (iterate), or fail (stop)
+4. **Configurable**: Max iterations, worker/reviewer models, custom prompts
+5. **Real-time**: Live output streaming and progress tracking
+
+### Roadmap-Based Automation
+Traditional autonomous loop for sequential milestone processing:
 1. Validates ROADMAP.md exists (required)
 2. Uses nextItem from status.json OR finds first incomplete
 3. Creates new conversation for each item
@@ -142,10 +168,11 @@ Agent manager runs autonomous loop that:
 - `npm start` - Run production build
 - `npm test` - Run tests
 
-## Agent Modes
+## Agent Execution Modes
 
-- **Interactive Mode** (default): Chat with Claude, send messages, see tool usage in real-time. Agent auto-starts when first message is sent.
-- **Autonomous Mode**: Runs through roadmap milestones automatically. Requires manual start.
+- **Interactive Mode** (default): Direct chat with Claude, send messages, see tool usage in real-time. Agent auto-starts when first message is sent.
+- **Autonomous Mode**: Basic sequential processing of roadmap milestones. Manual start required.
+- **Ralph Loop Mode**: Advanced iterative development with worker/reviewer cycle. Dedicated UI in Ralph Loop tab provides comprehensive controls, progress tracking, and history.
 
 ## Permission Modes (Runtime Toggle)
 
@@ -189,6 +216,7 @@ Conversations use UUID v4 IDs that also serve as Claude session IDs:
   - Configurable keybindings (Ctrl+Enter or Enter to send)
   - No Start button needed - just type and send
   - Permission mode toggle (Accept Edits/Plan) - restarts agent with same session
+  - Model selector in header for per-project model override
 
 - **File Editor**:
   - Browse project files in tree view
@@ -219,6 +247,14 @@ Conversations use UUID v4 IDs that also serve as Claude session IDs:
   - Browse recent logs with color-coded levels
   - View all tracked processes across projects
 
+- **Ralph Loop Tab**:
+  - Iterative worker/reviewer development pattern (Geoffrey Huntley's Ralph Wiggum technique)
+  - Configure task description, max iterations, and models
+  - Start/Pause/Resume/Stop controls
+  - Real-time progress display with iteration tracking
+  - Live output streaming from worker and reviewer
+  - History view of past Ralph Loop executions
+
 - **Mobile Support**:
   - Responsive sidebar with hamburger menu toggle
   - Collapsible navigation on small screens
@@ -233,6 +269,7 @@ Conversations use UUID v4 IDs that also serve as Claude session IDs:
 - `sendWithCtrlEnter` - Input keybinding preference (true=Ctrl+Enter sends, false=Enter sends)
 - `historyLimit` - Maximum conversations in history dropdown (5-100, default: 25)
 - `promptTemplates` - Reusable message templates with interpolation variables
+- `defaultModel` - Default Claude model for agents (default: claude-sonnet-4-20250514)
 
 ## Prompt Templates
 

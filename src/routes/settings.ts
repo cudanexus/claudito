@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { SettingsRepository, ClaudePermissions, PromptTemplate } from '../repositories';
 import { asyncHandler, ValidationError } from '../utils';
+import { SUPPORTED_MODELS, MODEL_DISPLAY_NAMES, isValidModel } from '../config/models';
 
 interface UpdateSettingsBody {
   maxConcurrentAgents?: number;
@@ -11,6 +12,7 @@ interface UpdateSettingsBody {
   enableDesktopNotifications?: boolean;
   appendSystemPrompt?: string;
   promptTemplates?: PromptTemplate[];
+  defaultModel?: string;
 }
 
 export interface SettingsChangeEvent {
@@ -32,9 +34,18 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
     res.json(settings);
   }));
 
+  // GET /api/settings/models - List available Claude models
+  router.get('/models', (_req: Request, res: Response) => {
+    const models = SUPPORTED_MODELS.map((modelId) => ({
+      id: modelId,
+      displayName: MODEL_DISPLAY_NAMES[modelId],
+    }));
+    res.json({ models });
+  });
+
   router.put('/', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as UpdateSettingsBody;
-    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt, promptTemplates } = body;
+    const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt, promptTemplates, defaultModel } = body;
 
     if (maxConcurrentAgents !== undefined && (typeof maxConcurrentAgents !== 'number' || maxConcurrentAgents < 1)) {
       throw new ValidationError('maxConcurrentAgents must be a positive number');
@@ -48,6 +59,10 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
 
     if (promptTemplates !== undefined) {
       validatePromptTemplates(promptTemplates);
+    }
+
+    if (defaultModel !== undefined && !isValidModel(defaultModel)) {
+      throw new ValidationError(`Invalid model: ${defaultModel}. Supported models: ${SUPPORTED_MODELS.join(', ')}`);
     }
 
     // Get current settings to detect changes
@@ -64,6 +79,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
       enableDesktopNotifications,
       appendSystemPrompt,
       promptTemplates,
+      defaultModel,
     });
 
     // Notify about settings changes
