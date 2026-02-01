@@ -143,6 +143,13 @@ timeline
    - Escape quotes inside labels: `A["Say \"Hello\""]`
    - Use proper arrow syntax: `-->` for flowcharts, `->>` for sequence diagrams
    - Check for matching brackets and parentheses
+   - **IMPORTANT: Common Errors to Avoid**
+     - Never use curly braces `{}` in node labels (they're reserved for rhombus/decision shapes)
+     - Replace `{project}` with just `project` or use `[project]`
+     - Avoid quotes in subgraph names: use `subgraph MyName` not `subgraph "My Name"`
+     - Use simple alphanumeric IDs for subgraphs: `subgraph ID [Display Name]`
+     - Special characters like `<`, `>`, `{`, `}` in labels must be avoided or properly escaped
+     - Use `&lt;` for `<` and `&gt;` for `>` if absolutely needed
 
 4. **Visual Clarity**
    - Group related elements
@@ -153,6 +160,53 @@ timeline
    - Diagrams in Claudito use a dark theme
    - Colors are optimized for dark backgrounds
    - Test visibility in both light and dark modes
+
+## Common Syntax Errors and Solutions
+
+### Problem: Curly braces in labels
+```mermaid
+%% WRONG - This will cause parse errors
+graph TD
+    A[Config in {project}/.config]
+```
+
+```mermaid
+%% CORRECT - Remove or replace curly braces
+graph TD
+    A[Config in project/.config]
+```
+
+### Problem: Quotes in subgraph names
+```mermaid
+%% WRONG - Quotes cause issues
+graph TB
+    subgraph "Frontend Layer"
+        A[Component]
+    end
+```
+
+```mermaid
+%% CORRECT - Use ID and display name syntax
+graph TB
+    subgraph Frontend [Frontend Layer]
+        A[Component]
+    end
+```
+
+### Problem: Special characters in node text
+```mermaid
+%% WRONG - Angle brackets and special chars
+graph LR
+    A[<Component>]
+    B[File: C:\path\to\file]
+```
+
+```mermaid
+%% CORRECT - Escape or avoid special characters
+graph LR
+    A[Component]
+    B[File: C:/path/to/file]
+```
 
 ## Common Patterns
 
@@ -216,3 +270,33 @@ When creating a diagram:
 6. Test the diagram mentally for correctness
 
 Always wrap the diagram in ```mermaid code blocks and ensure the syntax is valid.
+
+## Validation Checklist
+
+Before finalizing any diagram, check:
+1. **No curly braces `{}` in labels** - Replace with brackets `[]` or remove
+2. **No quotes in subgraph names** - Use the `subgraph ID [Name]` format
+3. **No unescaped special characters** - Particularly `<`, `>`, `{`, `}`, backslashes
+4. **Proper node ID format** - Start with letter, use only alphanumeric and underscores
+5. **Matching brackets** - Every `[` has a `]`, every `{` has a `}`
+6. **Valid arrow syntax** - Use correct arrows for diagram type
+7. **No line breaks in labels** - Use `<br/>` instead of actual line breaks
+
+## Safe Label Patterns
+
+```mermaid
+graph TD
+    %% Safe patterns for labels
+    A[Simple Label]
+    B[Label with spaces]
+    C[Multi-line<br/>Label]
+    D[Path: /home/user/project]
+    E[Array item 0]
+    F[Status: Running]
+
+    %% Avoid these patterns
+    %% WRONG: G[Object {key: value}]
+    %% WRONG: H["Quoted Label"]
+    %% WRONG: I[<Component>]
+    %% WRONG: J[Path: C:\Windows\System32]
+```

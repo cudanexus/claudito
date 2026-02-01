@@ -59,8 +59,10 @@
       if (lang === 'mermaid' && mermaid) {
         // Generate unique ID for the diagram
         var id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
-        // Return a div that mermaid will process
-        return '<div class="mermaid" id="' + id + '">' + escapeHtml(code) + '</div>';
+        // Add wrapper div for toolbar positioning
+        return '<div class="mermaid-wrapper" data-diagram-id="' + id + '">' +
+               '<div class="mermaid" id="' + id + '">' + escapeHtml(code) + '</div>' +
+               '</div>';
       }
 
       // Default code block rendering - use ToolRenderer if available for syntax highlighting
@@ -104,6 +106,8 @@
       if (mermaid && html.includes('class="mermaid"')) {
         setTimeout(function() {
           mermaid.run();
+          // Inject toolbars after rendering
+          injectMermaidToolbars();
         }, 0);
       }
 
@@ -612,6 +616,19 @@
     renderingContext.previousTimestamp = timestamp;
   }
 
+  /**
+   * Inject toolbars into mermaid diagram wrappers
+   */
+  function injectMermaidToolbars() {
+    $('.mermaid-wrapper').each(function() {
+      var $wrapper = $(this);
+      if ($wrapper.find('.mermaid-toolbar').length === 0) {
+        var $toolbar = $('#mermaid-toolbar-template').html();
+        $wrapper.append($toolbar);
+      }
+    });
+  }
+
   // Public API
   return {
     init: init,
@@ -629,6 +646,8 @@
     // Context management for timestamp differences
     resetRenderingContext: resetRenderingContext,
     setStartingTimestamp: setStartingTimestamp,
+    // Mermaid toolbar injection
+    injectMermaidToolbars: injectMermaidToolbars,
     // Expose icon helpers for testing
     getUserIcon: getUserIcon,
     getClaudeIcon: getClaudeIcon,

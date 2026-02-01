@@ -292,7 +292,8 @@ describe('FileSettingsRepository', () => {
         expect(settings.enableDesktopNotifications).toBe(false);
         expect(settings.claudeMdMaxSizeKB).toBe(50);
         expect(settings.agentPromptTemplate).toBe(DEFAULT_AGENT_PROMPT_TEMPLATE);
-        expect(settings.appendSystemPrompt).toBe('* ALWAYS use tasks instead of todos');
+        expect(settings.appendSystemPrompt).toBe(`* ALWAYS use tasks instead of todos
+* ALWAYS generate mermaidjs diagrams when explaining code or when generating a plan`);
 
         // Check nested structures
         expect(settings.claudePermissions.defaultMode).toBe('plan');

@@ -698,6 +698,27 @@ body {
   stroke: #9ca3af !important;
 }
 
+/* Mermaid diagram interactive wrapper */
+.mermaid-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+/* Show toolbar on hover */
+.mermaid-wrapper:hover .mermaid-toolbar {
+  opacity: 1;
+}
+
+/* Ensure mermaid SVGs are properly contained */
+.mermaid-wrapper .mermaid {
+  display: block;
+}
+
+/* Toolbar shadow for better visibility */
+.mermaid-toolbar {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
 .conversation-message.tool-use {
   background-color: #1a1a2e;
   border-left: 3px solid #a855f7;

@@ -238,7 +238,17 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
 
   router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     const projects = await projectRepository.findAll();
-    res.json(projects);
+
+    // Add current agent status to each project
+    const projectsWithCurrentStatus = projects.map((project) => {
+      const agentStatus = agentManager.getAgentStatus(project.id);
+      return {
+        ...project,
+        status: agentStatus // This will override the persisted status with current status
+      };
+    });
+
+    res.json(projectsWithCurrentStatus);
   }));
 
   router.post('/', asyncHandler(async (req: Request, res: Response) => {

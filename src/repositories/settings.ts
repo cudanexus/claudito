@@ -243,7 +243,8 @@ const DEFAULT_SETTINGS: GlobalSettings = {
   sendWithCtrlEnter: true,
   historyLimit: 25,
   enableDesktopNotifications: false,
-  appendSystemPrompt: '* ALWAYS use tasks instead of todos',
+  appendSystemPrompt: `* ALWAYS use tasks instead of todos
+* ALWAYS generate mermaidjs diagrams when explaining code or when generating a plan`,
   claudeMdMaxSizeKB: 50,
   agentLimits: {
     maxTurns: 0,       // 0 = unlimited

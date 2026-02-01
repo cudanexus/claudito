@@ -234,6 +234,88 @@
     showToast(message, 'error');
   }
 
+  // ============================================================
+  // Mermaid Diagram Helper Functions
+  // ============================================================
+
+  function copyMermaidDiagram(svgElement) {
+    var svgData = new XMLSerializer().serializeToString(svgElement);
+
+    // Use existing copyToClipboard function
+    copyToClipboard(svgData);
+  }
+
+  function saveMermaidAsImage(svgElement, diagramId) {
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+
+    // Get SVG data
+    var svgData = new XMLSerializer().serializeToString(svgElement);
+    var svgSize = svgElement.getBoundingClientRect();
+
+    // Set canvas size
+    canvas.width = svgSize.width * 2; // 2x for better quality
+    canvas.height = svgSize.height * 2;
+    ctx.scale(2, 2);
+
+    // Create image
+    var img = new Image();
+    var svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(svgBlob);
+
+    img.onload = function() {
+      // White background
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw image
+      ctx.drawImage(img, 0, 0);
+
+      // Convert to PNG and download
+      canvas.toBlob(function(blob) {
+        var link = document.createElement('a');
+        link.download = 'mermaid-diagram-' + (diagramId || Date.now()) + '.png';
+        link.href = URL.createObjectURL(blob);
+        link.click();
+
+        // Cleanup
+        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(link.href);
+
+        showToast('Diagram saved as image', 'success');
+      }, 'image/png');
+    };
+
+    img.onerror = function() {
+      showToast('Failed to save diagram', 'error');
+      URL.revokeObjectURL(url);
+    };
+
+    img.src = url;
+  }
+
+  function openMermaidInNewTab(svgElement) {
+    var svgData = new XMLSerializer().serializeToString(svgElement);
+
+    // Create full HTML document with styling
+    var html = '<!DOCTYPE html><html><head>' +
+      '<title>Mermaid Diagram</title>' +
+      '<style>' +
+      'body { margin: 20px; background: #1a202c; display: flex; justify-content: center; align-items: center; min-height: 100vh; }' +
+      'svg { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }' +
+      '</style></head><body>' + svgData + '</body></html>';
+
+    var blob = new Blob([html], { type: 'text/html' });
+    var url = URL.createObjectURL(blob);
+
+    window.open(url, '_blank');
+
+    // Cleanup URL after a delay
+    setTimeout(function() {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
   // Use module function
   var escapeHtml = EscapeUtils.escapeHtml;
 
@@ -1126,6 +1208,29 @@
       if (toolData) {
         openToolDetailModal(toolData);
       }
+    });
+
+    // Mermaid diagram interactions
+    $(document).on('click', '.mermaid-copy', function(e) {
+      e.stopPropagation();
+      var $wrapper = $(this).closest('.mermaid-wrapper');
+      var svg = $wrapper.find('svg')[0];
+      copyMermaidDiagram(svg);
+    });
+
+    $(document).on('click', '.mermaid-save', function(e) {
+      e.stopPropagation();
+      var $wrapper = $(this).closest('.mermaid-wrapper');
+      var svg = $wrapper.find('svg')[0];
+      var diagramId = $wrapper.data('diagram-id');
+      saveMermaidAsImage(svg, diagramId);
+    });
+
+    $(document).on('click', '.mermaid-open', function(e) {
+      e.stopPropagation();
+      var $wrapper = $(this).closest('.mermaid-wrapper');
+      var svg = $wrapper.find('svg')[0];
+      openMermaidInNewTab(svg);
     });
 
     // Delete task button in roadmap

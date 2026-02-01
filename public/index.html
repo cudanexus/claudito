@@ -1835,6 +1835,21 @@
     </button>
   </div>
 
+  <!-- Mermaid Diagram Toolbar (hidden by default, shown on hover) -->
+  <div id="mermaid-toolbar-template" class="hidden">
+    <div class="mermaid-toolbar absolute top-2 right-2 bg-gray-800 bg-opacity-90 rounded-lg p-1 flex gap-1 opacity-0 transition-opacity duration-200">
+      <button class="mermaid-copy px-2 py-1 text-gray-300 hover:text-white hover:bg-gray-700 rounded" title="Copy diagram">
+        <i class="fas fa-copy text-sm"></i>
+      </button>
+      <button class="mermaid-save px-2 py-1 text-gray-300 hover:text-white hover:bg-gray-700 rounded" title="Save as image">
+        <i class="fas fa-download text-sm"></i>
+      </button>
+      <button class="mermaid-open px-2 py-1 text-gray-300 hover:text-white hover:bg-gray-700 rounded" title="Open in new tab">
+        <i class="fas fa-external-link-alt text-sm"></i>
+      </button>
+    </div>
+  </div>
+
   <!-- Git Context Menu -->
   <div id="git-context-menu" class="hidden fixed bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 py-1 min-w-40">
     <!-- For unstaged files -->
