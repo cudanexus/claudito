@@ -99,6 +99,67 @@ describe('DefaultClaudeAgent', () => {
 
       expect(agent.permissionMode).toBe('plan');
     });
+
+    it('should keep skipPermissions undefined when permissions object is provided without skipPermissions', () => {
+      // Create a permissions object without skipPermissions property
+      const permissionsWithoutSkip: any = {
+        permissionMode: 'plan',
+        allowedTools: ['Read', 'Write'],
+      };
+
+      agent = new DefaultClaudeAgent({
+        projectId: 'test',
+        projectPath: '/test',
+        permissions: permissionsWithoutSkip,
+        processSpawner: mockSpawner,
+      });
+
+      // Access private _permissions property to verify skipPermissions is undefined
+      const permissions = (agent as any)._permissions;
+      expect(permissions.skipPermissions).toBeUndefined();
+      expect(permissions.permissionMode).toBe('plan');
+      expect(permissions.allowedTools).toEqual(['Read', 'Write']);
+    });
+
+    it('should default skipPermissions to false when no permissions object is provided', () => {
+      agent = new DefaultClaudeAgent({
+        projectId: 'test',
+        projectPath: '/test',
+        processSpawner: mockSpawner,
+      });
+
+      // Access private _permissions property to verify skipPermissions default
+      const permissions = (agent as any)._permissions;
+      expect(permissions.skipPermissions).toBe(false);
+    });
+
+    it('should respect explicit skipPermissions false value in permissions', () => {
+      agent = new DefaultClaudeAgent({
+        projectId: 'test',
+        projectPath: '/test',
+        permissions: {
+          skipPermissions: false,
+        },
+        processSpawner: mockSpawner,
+      });
+
+      const permissions = (agent as any)._permissions;
+      expect(permissions.skipPermissions).toBe(false);
+    });
+
+    it('should respect explicit skipPermissions true value in permissions', () => {
+      agent = new DefaultClaudeAgent({
+        projectId: 'test',
+        projectPath: '/test',
+        permissions: {
+          skipPermissions: true,
+        },
+        processSpawner: mockSpawner,
+      });
+
+      const permissions = (agent as any)._permissions;
+      expect(permissions.skipPermissions).toBe(true);
+    });
   });
 
   describe('start', () => {
@@ -315,7 +376,7 @@ describe('DefaultClaudeAgent', () => {
       });
     });
 
-    it('should skip disabled MCP servers', () => {
+    it('should include disabled MCP servers when passed explicitly', () => {
       const mockFs = jest.mocked(fs);
       mockFs.existsSync.mockReturnValue(true);
       mockFs.mkdirSync.mockImplementation(() => undefined);
@@ -338,9 +399,14 @@ describe('DefaultClaudeAgent', () => {
       agent.start('test instructions');
 
       const args = getSpawnArgs(mockSpawner);
-      // Should not have --mcp-config flag since no servers are enabled
-      expect(args).not.toContain('--mcp-config');
-      expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+      // Should have --mcp-config flag even with disabled servers (they've been pre-filtered)
+      expect(args).toContain('--mcp-config');
+      expect(mockFs.writeFileSync).toHaveBeenCalled();
+
+      const writtenConfig = JSON.parse(mockFs.writeFileSync.mock.calls[0]?.[1] as string || '{}');
+      expect(writtenConfig.mcpServers['disabled-server']).toEqual({
+        command: 'some-command'
+      });
     });
 
     it('should handle multiple MCP servers', () => {

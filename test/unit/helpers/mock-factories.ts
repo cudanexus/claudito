@@ -968,6 +968,8 @@ export function createMockAgentManager(): jest.Mocked<AgentManager> {
     restartAllRunningAgents: jest.fn().mockResolvedValue(undefined),
     restartProjectAgent: jest.fn().mockResolvedValue(undefined),
     getRunningProjectIds: jest.fn().mockImplementation(() => Array.from(runningAgents.keys())),
+    startOneOffAgent: jest.fn().mockResolvedValue('oneoff-test-id'),
+    stopOneOffAgent: jest.fn().mockResolvedValue(undefined),
     on: jest.fn().mockImplementation(<K extends keyof AgentManagerEvents>(
       event: K,
       listener: AgentManagerEvents[K]

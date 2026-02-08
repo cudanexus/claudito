@@ -615,7 +615,7 @@
     // Trigger UI blocking after rendering
     setTimeout(function() {
       if (typeof window !== 'undefined' && window.setPromptBlockingState) {
-        window.setPromptBlockingState('askUserQuestion');
+        window.setPromptBlockingState('askuser');
       }
     }, 0);
 

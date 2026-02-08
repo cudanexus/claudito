@@ -6,6 +6,7 @@ import { createConversationRouter } from './conversation';
 import { createShellRouter } from './shell';
 import { createRalphLoopRouter } from './ralph-loop';
 import { createGitRouter } from './git';
+import { createOptimizationRouter } from './optimization';
 
 // Re-export types for backward compatibility
 export * from './types';
@@ -26,6 +27,7 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
   router.use('/:id/shell', createShellRouter(deps));
   router.use('/:id/ralph-loop', createRalphLoopRouter(deps));
   router.use('/:id/git', createGitRouter(deps));
+  router.use('/:id', createOptimizationRouter(deps));
 
   return router;
 }

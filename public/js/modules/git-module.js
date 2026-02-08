@@ -885,6 +885,11 @@
       }
     });
 
+    $('#btn-generate-commit-msg').on('click', function(e) {
+      e.preventDefault();
+      generateCommitMessage();
+    });
+
     $('#btn-git-commit').on('click', function() {
       if (gitOperationInProgress) return;
       var message = $('#git-commit-message').val().trim();
@@ -1010,6 +1015,57 @@
           });
       }
     });
+  }
+
+  function generateCommitMessage() {
+    if (!state.selectedProjectId || !gitStatus) {
+      showToast('No project selected', 'warning');
+      return;
+    }
+
+    // Check if we have staged files
+    if (!gitStatus.staged || gitStatus.staged.length === 0) {
+      showToast('No staged files to commit', 'warning');
+      return;
+    }
+
+    var $link = $('#btn-generate-commit-msg');
+    $link.html('<svg class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Generating...');
+
+    // Build the prompt
+    var stagedFiles = gitStatus.staged.map(function(file) {
+      return file.type + ': ' + file.path;
+    }).join('\n');
+
+    var prompt = 'Please generate a concise and descriptive git commit message for the following staged changes:\n\n' +
+      'Staged files:\n' + stagedFiles + '\n\n' +
+      'Important:\n' +
+      '- The commit message should follow conventional commit format (type: description)\n' +
+      '- Keep it under 72 characters\n' +
+      '- Be specific about what changed\n' +
+      '- Use present tense ("add" not "added")\n' +
+      '- Don\'t include "Co-Authored-By" or any other metadata\n\n' +
+      'Just provide the commit message, nothing else.';
+
+    // Check if agent is running
+    var project = findProjectById ? findProjectById(state.selectedProjectId) : null;
+    if (project && project.status === 'running') {
+      // Send via interactive agent
+      api.sendAgentMessage(state.selectedProjectId, prompt)
+        .done(function() {
+          showToast('Generating commit message...', 'info');
+          state.gitCommitMessagePending = true;
+        })
+        .fail(function(xhr) {
+          showToast('Failed to generate commit message: ' + getErrorMessage(xhr), 'error');
+        })
+        .always(function() {
+          $link.html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Generate');
+        });
+    } else {
+      showToast('Please start the agent first', 'warning');
+      $link.html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Generate');
+    }
   }
 
   return {

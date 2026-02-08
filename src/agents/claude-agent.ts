@@ -168,7 +168,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.projectPath = config.projectPath;
     this._mode = config.mode || 'interactive';
     this._permissions = config.permissions ?? {
-      skipPermissions: config.skipPermissions ?? true,
+      skipPermissions: config.skipPermissions ?? false,
     };
     this._limits = config.limits ?? {};
     this._streaming = config.streaming ?? {};

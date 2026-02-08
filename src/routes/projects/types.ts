@@ -17,6 +17,7 @@ import { AgentManager } from '../../agents';
 import { RalphLoopService } from '../../services/ralph-loop/types';
 import { ConnectedClient } from '../../websocket/websocket-server';
 import { ProjectDiscoveryService } from '../../services/project-discovery';
+import { ClaudeOptimizationService } from '../../services';
 
 // Router dependencies interface
 export interface ProjectRouterDependencies {
@@ -34,6 +35,7 @@ export interface ProjectRouterDependencies {
   shellEnabled?: boolean;
   ralphLoopService?: RalphLoopService | null;
   projectDiscoveryService?: ProjectDiscoveryService | null;
+  optimizationService?: ClaudeOptimizationService;
 }
 
 // Request body interfaces

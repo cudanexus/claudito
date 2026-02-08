@@ -639,6 +639,36 @@
   };
 
   /**
+   * Optimize a Claude file using a dedicated optimization agent
+   * @function optimizeClaudeFile
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} filePath - Absolute path to CLAUDE.md file
+   * @param {string} content - Current content to optimize
+   * @param {Array<string>} [optimizationGoals] - Optional specific optimization goals
+   * @returns {Promise<{success: boolean, message: string}>} Optimization status
+   * @example
+   * await ApiClient.optimizeClaudeFile(
+   *   projectId,
+   *   '/home/user/.claude/CLAUDE.md',
+   *   currentContent,
+   *   ['Remove duplicates', 'Improve clarity']
+   * );
+   */
+  ApiClient.optimizeClaudeFile = function(projectId, filePath, content, optimizationGoals) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/optimize-file',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({
+        filePath: filePath,
+        content: content,
+        optimizationGoals: optimizationGoals
+      })
+    });
+  };
+
+  /**
    * Get optimization suggestions for CLAUDE.md and ROADMAP.md files
    * @function getOptimizations
    * @memberof module:ApiClient

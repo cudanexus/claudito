@@ -1181,5 +1181,147 @@ describe('DefaultAgentManager', () => {
         })
       );
     });
+
+    it('should apply project MCP overrides to filter disabled servers', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: true,
+          servers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+            { id: 'server2', name: 'Server 2', enabled: true, type: 'stdio' as const, command: 'cmd2' },
+            { id: 'server3', name: 'Server 3', enabled: true, type: 'http' as const, url: 'http://test' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      // Project has MCP overrides that disable server2
+      const projectWithOverrides = {
+        ...testProject,
+        mcpOverrides: {
+          enabled: true,
+          serverOverrides: {
+            server1: { enabled: true },
+            server2: { enabled: false }, // Disabled for this project
+            server3: { enabled: true },
+          },
+        },
+      };
+      mockProjectRepo.findById.mockResolvedValue(projectWithOverrides);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      // Should only include server1 and server3
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio', command: 'cmd1' },
+            { id: 'server3', name: 'Server 3', enabled: true, type: 'http', url: 'http://test' },
+          ],
+        })
+      );
+    });
+
+    it('should disable all MCP servers when project overrides have enabled: false', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: true,
+          servers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+            { id: 'server2', name: 'Server 2', enabled: true, type: 'stdio' as const, command: 'cmd2' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      // Project has MCP disabled entirely
+      const projectWithOverrides = {
+        ...testProject,
+        mcpOverrides: {
+          enabled: false, // All MCP disabled for this project
+          serverOverrides: {},
+        },
+      };
+      mockProjectRepo.findById.mockResolvedValue(projectWithOverrides);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      // Should pass empty array
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [],
+        })
+      );
+    });
+
+    it('should use global servers when project has no overrides', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: true,
+          servers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+            { id: 'server2', name: 'Server 2', enabled: false, type: 'stdio' as const, command: 'cmd2' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      // Project has no MCP overrides
+      const projectWithoutOverrides = {
+        ...testProject,
+        mcpOverrides: null,
+      };
+      mockProjectRepo.findById.mockResolvedValue(projectWithoutOverrides);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      // Should include only globally enabled server
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio', command: 'cmd1' },
+          ],
+        })
+      );
+    });
+
+    it('should handle project overrides with no specific server overrides', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: true,
+          servers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+            { id: 'server2', name: 'Server 2', enabled: true, type: 'stdio' as const, command: 'cmd2' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      // Project has MCP enabled but no specific server overrides (all default to enabled)
+      const projectWithOverrides = {
+        ...testProject,
+        mcpOverrides: {
+          enabled: true,
+          serverOverrides: {},
+        },
+      };
+      mockProjectRepo.findById.mockResolvedValue(projectWithOverrides);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      // Should include all servers since no specific overrides
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [
+            { id: 'server1', name: 'Server 1', enabled: true, type: 'stdio', command: 'cmd1' },
+            { id: 'server2', name: 'Server 2', enabled: true, type: 'stdio', command: 'cmd2' },
+          ],
+        })
+      );
+    });
   });
 });

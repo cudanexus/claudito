@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server, IncomingMessage } from 'http';
 import { AgentManager, AgentMessage, QueuedProject, AgentResourceStatus, ContextUsage, WaitingStatus, FullAgentStatus } from '../agents';
-import { RoadmapGenerator, RoadmapMessage, AuthService, ShellService } from '../services';
+import { RoadmapGenerator, RoadmapMessage, AuthService, ShellService, ClaudeOptimizationService } from '../services';
 import { RalphLoopService, RalphLoopStatus, IterationSummary, ReviewerFeedback, RalphLoopFinalStatus } from '../services/ralph-loop/types';
 import { ConversationRepository, ProjectRepository } from '../repositories';
 import { getLogger, Logger, getLogStore } from '../utils/logger';
@@ -98,6 +98,24 @@ export interface FrontendErrorData {
   column?: number;
 }
 
+export interface OptimizationProgressData {
+  status: 'starting' | 'running' | 'processing' | 'completed' | 'failed';
+  message: string;
+  percentage?: number;
+}
+
+export interface OptimizationCompleteData {
+  result: {
+    success: boolean;
+    originalContent?: string;
+    optimizedContent?: string;
+    diff?: string;
+    summary?: string;
+    error?: string;
+  };
+  filePath: string;
+}
+
 
 export interface AgentMessageWithContext extends AgentMessage {
   contextUsage?: ContextUsage;
@@ -125,6 +143,8 @@ export type WebSocketMessageData =
   | RalphLoopErrorData
   | FrontendErrorData
   | ResourceEventData
+  | OptimizationProgressData
+  | OptimizationCompleteData
   | string; // Covers 'connected' messages and simple loop events
 
 export interface SessionRecoveryData {
@@ -155,6 +175,8 @@ export interface WebSocketMessage {
     | 'ralph_loop_tool_use'
     | 'frontend_error'
     | 'resource_event'
+    | 'optimization_progress'
+    | 'optimization_complete'
 ;
   projectId?: string;
   data?: WebSocketMessageData | SessionRecoveryData;
@@ -177,6 +199,7 @@ export interface WebSocketServerDependencies {
   ralphLoopService?: RalphLoopService;
   conversationRepository?: ConversationRepository;
   projectRepository?: ProjectRepository;
+  optimizationService?: ClaudeOptimizationService;
 }
 
 export class DefaultWebSocketServer implements ProjectWebSocketServer {
@@ -188,6 +211,7 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
   private readonly ralphLoopService?: RalphLoopService;
   private readonly conversationRepository?: ConversationRepository;
   private readonly projectRepository?: ProjectRepository;
+  private readonly optimizationService?: ClaudeOptimizationService;
   private readonly projectSubscriptions: Map<string, Set<WebSocket>> = new Map();
   private readonly logger: Logger;
   // Client registry for tracking connected clients
@@ -202,11 +226,13 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     this.ralphLoopService = deps.ralphLoopService;
     this.conversationRepository = deps.conversationRepository;
     this.projectRepository = deps.projectRepository;
+    this.optimizationService = deps.optimizationService;
     this.logger = getLogger('websocket');
     this.setupAgentListeners();
     this.setupRoadmapListeners();
     this.setupShellListeners();
     this.setupRalphLoopListeners();
+    this.setupOptimizationListeners();
     this.setupLoggerListeners();
   }
 
@@ -678,6 +704,33 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
 
       // Save tool use message to conversation
       void this.saveRalphLoopMessage(projectId, 'ralph_loop_tool_use', data);
+    });
+  }
+
+  private setupOptimizationListeners(): void {
+    if (!this.optimizationService) {
+      this.logger.debug('No optimization service provided, skipping listener setup');
+      return;
+    }
+
+    this.logger.info('Setting up optimization service listeners');
+
+    this.optimizationService.on('optimizationProgress', (data: any) => {
+      const { projectId, status, message, percentage } = data;
+      this.broadcastToProject(projectId, {
+        type: 'optimization_progress',
+        projectId,
+        data: { status, message, percentage },
+      });
+    });
+
+    this.optimizationService.on('optimization:complete', (data: any) => {
+      const { projectId, result, filePath } = data;
+      this.broadcastToProject(projectId, {
+        type: 'optimization_complete',
+        projectId,
+        data: { result, filePath },
+      });
     });
   }
 

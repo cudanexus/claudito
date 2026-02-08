@@ -22,6 +22,7 @@
   var FileBrowser = null;
   var marked = null;
   var hljs = null;
+  var findProjectById = null;
 
   function init(deps) {
     state = deps.state;
@@ -34,6 +35,7 @@
     FileBrowser = deps.FileBrowser;
     marked = deps.marked;
     hljs = deps.hljs;
+    findProjectById = deps.findProjectById;
   }
 
   // ===== Context Usage Modal =====
@@ -234,6 +236,7 @@
     $('#claude-file-size').text(formatFileSize(file.size));
     $('#claude-file-editor').val(file.content).prop('disabled', false);
     $('#btn-save-claude-file').addClass('hidden');
+    $('#btn-optimize-claude-file').removeClass('hidden');
     updateClaudeFilePreview();
 
     renderClaudeFilesList();
@@ -339,6 +342,190 @@
       });
   }
 
+  function optimizeClaudeFile() {
+    var currentFile = state.claudeFilesState.currentFile;
+
+    if (!currentFile || !state.selectedProjectId) return;
+
+    var content = $('#claude-file-editor').val();
+    if (!content.trim()) {
+      showToast('Nothing to optimize', 'warning');
+      return;
+    }
+
+    var $btn = $('#btn-optimize-claude-file');
+    $btn.html('<svg class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Optimizing...').prop('disabled', true);
+
+    // Show loading mask
+    showOptimizationLoadingMask();
+
+    // Define optimization goals
+    var optimizationGoals = [
+      'Remove duplicated rules or instructions',
+      'Consolidate similar rules into more concise versions',
+      'Remove rules that contradict Claude\'s core values or capabilities',
+      'Organize rules by category for better readability',
+      'Add/modify rules that optimize Claude\'s effectiveness',
+      'Remove vague or unclear instructions'
+    ];
+
+    // Use dedicated optimization agent
+    api.optimizeClaudeFile(state.selectedProjectId, currentFile.path, content, optimizationGoals)
+      .done(function(response) {
+        state.claudeOptimizationPending = true;
+        state.claudeOptimizationOriginalContent = content;
+        // The optimization result will come via WebSocket
+      })
+      .fail(function(xhr) {
+        hideOptimizationLoadingMask();
+        var errorMsg = 'Failed to start optimization';
+        if (xhr.responseJSON && xhr.responseJSON.error) {
+          errorMsg = xhr.responseJSON.error;
+          if (errorMsg.includes('already in progress')) {
+            showToast('Optimization already in progress', 'warning');
+            $btn.html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Optimize').prop('disabled', false);
+            return;
+          }
+        }
+        showErrorToast(xhr, errorMsg);
+        $btn.html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Optimize').prop('disabled', false);
+      });
+  }
+
+  function showOptimizationLoadingMask() {
+    var $modal = $('#modal-claude-files');
+
+    // Create loading mask if it doesn't exist
+    var $mask = $modal.find('.optimization-loading-mask');
+    if ($mask.length === 0) {
+      $mask = $('<div class="optimization-loading-mask absolute inset-0 bg-gray-900/80 z-50 flex items-center justify-center rounded-lg">' +
+        '<div class="bg-gray-800 p-6 rounded-lg shadow-xl text-center">' +
+          '<svg class="w-12 h-12 animate-spin mx-auto mb-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>' +
+          '</svg>' +
+          '<h3 class="text-lg font-medium mb-2">Optimizing CLAUDE.md</h3>' +
+          '<p class="text-gray-400 text-sm">This may take a moment...</p>' +
+          '<p class="optimization-progress-text text-gray-500 text-xs mt-2"></p>' +
+        '</div>' +
+      '</div>');
+
+      // Add to the modal content container
+      $modal.find('.modal-content > div').append($mask);
+    }
+
+    $mask.removeClass('hidden');
+  }
+
+  function hideOptimizationLoadingMask() {
+    var $mask = $('#modal-claude-files .optimization-loading-mask');
+    $mask.addClass('hidden');
+  }
+
+  function updateOptimizationProgress(message) {
+    var $progressText = $('#modal-claude-files .optimization-progress-text');
+    $progressText.text(message);
+  }
+
+  function showOptimizationResult(result) {
+    hideOptimizationLoadingMask();
+
+    // Create diff view in the modal
+    var $editorArea = $('#claude-file-editor-area');
+    var $diffView = $editorArea.find('.optimization-diff-view');
+
+    if ($diffView.length === 0) {
+      $diffView = $('<div class="optimization-diff-view hidden"></div>');
+      $editorArea.append($diffView);
+    }
+
+    var diffHtml = '<div class="flex flex-col h-full">' +
+      '<div class="bg-gray-800 p-3 border-b border-gray-700">' +
+        '<h4 class="font-medium mb-2">Optimization Complete</h4>' +
+        '<div class="text-sm text-gray-300">' +
+          '<div class="mb-2">' + escapeHtml(result.summary || 'Optimization completed successfully') + '</div>' +
+        '</div>' +
+        '<div class="flex gap-2 mt-3">' +
+          '<button onclick="ModalsModule.acceptOptimization()" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm transition-colors">' +
+            'Apply Changes' +
+          '</button>' +
+          '<button onclick="ModalsModule.rejectOptimization()" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1.5 rounded text-sm transition-colors">' +
+            'Cancel' +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="flex-1 overflow-hidden">' +
+        '<div class="h-full bg-gray-900 overflow-auto p-4">' +
+          '<div class="font-mono text-xs whitespace-pre">' + formatDiff(result.diff) + '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    $diffView.html(diffHtml);
+
+    // Hide editor, show diff
+    $('#claude-editor-pane').addClass('hidden');
+    $('#claude-preview-pane').addClass('hidden');
+    $diffView.removeClass('hidden');
+
+    // Store the optimized content
+    state.claudeOptimizationResult = result;
+  }
+
+  function formatDiff(diff) {
+    if (!diff) return '<span class="text-gray-500">No changes detected</span>';
+
+    var lines = diff.split('\n');
+    var formatted = lines.map(function(line) {
+      if (line.startsWith('+')) {
+        return '<span class="text-green-400">' + escapeHtml(line) + '</span>';
+      } else if (line.startsWith('-')) {
+        return '<span class="text-red-400">' + escapeHtml(line) + '</span>';
+      } else {
+        return '<span class="text-gray-400">' + escapeHtml(line) + '</span>';
+      }
+    });
+
+    return formatted.join('\n');
+  }
+
+  function acceptOptimization() {
+    if (!state.claudeOptimizationResult || !state.claudeOptimizationResult.optimizedContent) {
+      return;
+    }
+
+    // Update the editor with optimized content
+    $('#claude-file-editor').val(state.claudeOptimizationResult.optimizedContent);
+
+    // Trigger input event to show save button
+    $('#claude-file-editor').trigger('input');
+
+    // Hide diff view, show editor
+    $('.optimization-diff-view').addClass('hidden');
+    $('#claude-editor-pane').removeClass('hidden');
+
+    // Reset button
+    $('#btn-optimize-claude-file').html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Optimize').prop('disabled', false);
+
+    showToast('Optimization applied. Remember to save the file.', 'success');
+
+    // Clean up
+    state.claudeOptimizationResult = null;
+    state.claudeOptimizationPending = false;
+  }
+
+  function rejectOptimization() {
+    // Hide diff view, show editor
+    $('.optimization-diff-view').addClass('hidden');
+    $('#claude-editor-pane').removeClass('hidden');
+
+    // Reset button
+    $('#btn-optimize-claude-file').html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Optimize').prop('disabled', false);
+
+    // Clean up
+    state.claudeOptimizationResult = null;
+    state.claudeOptimizationPending = false;
+  }
+
   function setupHandlers() {
     // Claude file selection
     $(document).on('click', '.claude-file-item', function() {
@@ -369,6 +556,11 @@
       saveClaudeFile();
     });
 
+    // Optimize Claude file
+    $('#btn-optimize-claude-file').on('click', function() {
+      optimizeClaudeFile();
+    });
+
     // Toggle preview
     $('#btn-toggle-claude-preview').on('click', function() {
       toggleClaudeFilePreview();
@@ -381,9 +573,16 @@
     openClaudeFilesModal: openClaudeFilesModal,
     selectClaudeFile: selectClaudeFile,
     saveClaudeFile: saveClaudeFile,
+    optimizeClaudeFile: optimizeClaudeFile,
     toggleClaudeFilePreview: toggleClaudeFilePreview,
     updateClaudeFilePreview: updateClaudeFilePreview,
     renderClaudeFilesList: renderClaudeFilesList,
-    setupHandlers: setupHandlers
+    setupHandlers: setupHandlers,
+    showOptimizationLoadingMask: showOptimizationLoadingMask,
+    hideOptimizationLoadingMask: hideOptimizationLoadingMask,
+    updateOptimizationProgress: updateOptimizationProgress,
+    showOptimizationResult: showOptimizationResult,
+    acceptOptimization: acceptOptimization,
+    rejectOptimization: rejectOptimization
   };
 }));

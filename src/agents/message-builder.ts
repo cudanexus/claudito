@@ -118,8 +118,8 @@ export class MessageBuilder {
    * Returns the path to the generated config file or null if no servers are enabled.
    */
   static generateMcpConfig(servers: McpServerConfig[], projectId: string): string | null {
-    const enabledServers = servers.filter(s => s.enabled);
-    if (enabledServers.length === 0) {
+    // No filtering here - servers have already been filtered by applyMcpOverrides
+    if (servers.length === 0) {
       return null;
     }
 
@@ -128,7 +128,7 @@ export class MessageBuilder {
       mcpServers: {}
     };
 
-    for (const server of enabledServers) {
+    for (const server of servers) {
       const serverConfig: any = {};
 
       if (server.type === 'stdio') {

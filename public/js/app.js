@@ -2018,7 +2018,7 @@
       startSelectedAgent();
     });
 
-    $('#btn-stop-agent').on('click', function() {
+    $('#btn-restart-agent').on('click', function() {
       if (state.isRalphLoopRunning) {
         stopRalphLoop();
       } else {
@@ -2383,85 +2383,113 @@
       var $btn = $(this);
       var toolId = $btn.data('tool-id');
       var questionIndex = $btn.data('question-index');
+      var optionIndex = $btn.data('option-index');
       var optionLabel = $btn.data('option-label');
+      var $container = $btn.closest('.ask-user-question');
 
-      // Check if this is part of a multi-question set
-      var $askUserQuestion = $btn.closest('.ask-user-question');
-      var totalQuestions = $askUserQuestion.find('[data-question-index]').length / $askUserQuestion.find('[data-question-index="0"]').length;
+      // Handle "Other" option
+      if (optionIndex === -1) {
+        handleAskUserOtherOption($btn, toolId, questionIndex, $container);
+        return;
+      }
 
-      if (totalQuestions > 1) {
-        // Multi-question mode
-        if (!state.multiQuestionState.activeToolId) {
-          state.multiQuestionState.activeToolId = toolId;
-          state.multiQuestionState.totalQuestions = totalQuestions;
-          state.multiQuestionState.isMultiQuestion = true;
-        }
+      processAskUserAnswer($btn, toolId, questionIndex, optionLabel, $container);
+    });
+  }
 
-        // Store answer
-        state.multiQuestionState.answers[questionIndex] = optionLabel;
+  function handleAskUserOtherOption($btn, toolId, questionIndex, $container) {
+    var totalQuestions = countAskUserQuestions($container);
+    var isMulti = totalQuestions > 1;
 
-        // Visual feedback - disable all buttons in this question
-        $btn.closest('[data-question-index="' + questionIndex + '"]')
-          .find('.ask-user-option')
-          .prop('disabled', true)
-          .addClass('opacity-50 cursor-not-allowed');
-        $btn.removeClass('opacity-50').addClass('bg-purple-600');
+    showPrompt('Custom Answer', 'Enter your response:', {
+      placeholder: 'Type your answer...',
+      submitText: 'Submit'
+    }).then(function(customText) {
+      if (!customText) return;
 
-        // Check if all answered
-        if (Object.keys(state.multiQuestionState.answers).length === totalQuestions) {
-          // Format as single combined message
-          var parts = [];
-          for (var i = 0; i < totalQuestions; i++) {
-            if (state.multiQuestionState.answers[i]) {
-              parts.push('Q' + (i + 1) + ': ' + state.multiQuestionState.answers[i]);
-            }
-          }
-          var consolidatedResponse = parts.join(', ');
-          sendQuestionResponse(consolidatedResponse);
-
-          // Clear prompt blocking
-          state.justAnsweredQuestion = true;
-          setPromptBlockingState(null);
-          setTimeout(function() {
-            state.justAnsweredQuestion = false;
-          }, 100);
-
-          // Mark the tool as completed
-          ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + consolidatedResponse);
-
-          // Reset state
-          state.multiQuestionState = {
-            activeToolId: null,
-            totalQuestions: 0,
-            answers: {},
-            isMultiQuestion: false
-          };
-
-          // Remove progress indicator
-          $('#multi-question-progress').remove();
-        } else {
-          // Update progress indicator
-          updateMultiQuestionProgress();
-        }
+      if (isMulti) {
+        // Update the Other button label to show the custom text
+        $btn.find('.font-medium').text('Other: ' + customText);
+        processAskUserAnswer($btn, toolId, questionIndex, customText, $container);
       } else {
-        // Single question - existing behavior
-        sendQuestionResponse(optionLabel);
-
-        // Clear prompt blocking
-        state.justAnsweredQuestion = true;
-        setPromptBlockingState(null);
-        setTimeout(function() {
-          state.justAnsweredQuestion = false;
-        }, 100);
-
-        // Disable all buttons in this question
-        $btn.closest('.ask-user-question').find('.ask-user-option').prop('disabled', true).addClass('opacity-50 cursor-not-allowed');
-        $btn.addClass('bg-purple-600');
-
-        // Mark the tool as completed
-        ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + optionLabel);
+        styleSelectedButton($btn, questionIndex, $container);
+        handleSingleQuestionAnswer(toolId, customText);
       }
     });
+  }
+
+  function processAskUserAnswer($btn, toolId, questionIndex, answerText, $container) {
+    var totalQuestions = countAskUserQuestions($container);
+
+    styleSelectedButton($btn, questionIndex, $container);
+
+    if (totalQuestions > 1) {
+      handleMultiQuestionAnswer(toolId, questionIndex, answerText, totalQuestions, $container);
+    } else {
+      handleSingleQuestionAnswer(toolId, answerText);
+    }
+  }
+
+  function countAskUserQuestions($container) {
+    return $container.find('div.flex[data-question-index]').length;
+  }
+
+  function styleSelectedButton($btn, questionIndex, $container) {
+    $container.find('div.flex[data-question-index="' + questionIndex + '"]')
+      .find('.ask-user-option')
+      .prop('disabled', true)
+      .addClass('opacity-50 cursor-not-allowed');
+    $btn.removeClass('opacity-50').addClass('bg-purple-600 ring-2 ring-purple-400');
+  }
+
+  function clearBlockingAfterAnswer() {
+    state.justAnsweredQuestion = true;
+    setPromptBlockingState(null);
+    setTimeout(function() {
+      state.justAnsweredQuestion = false;
+    }, 100);
+  }
+
+  function handleSingleQuestionAnswer(toolId, answerText) {
+    sendQuestionResponse(answerText);
+    clearBlockingAfterAnswer();
+    ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + answerText);
+  }
+
+  function handleMultiQuestionAnswer(toolId, questionIndex, answerText, totalQuestions, $container) {
+    if (!state.multiQuestionState.activeToolId) {
+      state.multiQuestionState.activeToolId = toolId;
+      state.multiQuestionState.totalQuestions = totalQuestions;
+      state.multiQuestionState.isMultiQuestion = true;
+    }
+
+    state.multiQuestionState.answers[questionIndex] = answerText;
+
+    if (Object.keys(state.multiQuestionState.answers).length === totalQuestions) {
+      var parts = [];
+
+      for (var i = 0; i < totalQuestions; i++) {
+        if (state.multiQuestionState.answers[i]) {
+          parts.push('Q' + (i + 1) + ': ' + state.multiQuestionState.answers[i]);
+        }
+      }
+
+      var consolidatedResponse = parts.join(', ');
+      sendQuestionResponse(consolidatedResponse);
+      clearBlockingAfterAnswer();
+      ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + consolidatedResponse);
+
+      state.multiQuestionState = {
+        activeToolId: null,
+        totalQuestions: 0,
+        answers: {},
+        isMultiQuestion: false
+      };
+
+      $('#multi-question-progress').remove();
+    } else {
+      updateMultiQuestionProgress();
+    }
   }
 
   function sendPlanModeResponse(response) {
@@ -2708,14 +2736,16 @@
     var project = findProjectById(state.selectedProjectId);
     var isRunning = project && project.status === 'running';
 
-    // Always in interactive mode: hide start button, only show stop when running
-    $('#btn-start-agent').addClass('hidden');
+    // Hide loop controls (not used in interactive mode)
     $('#loop-controls').addClass('hidden');
 
     if (isRunning) {
-      $('#btn-stop-agent').removeClass('hidden');
+      $('#btn-start-agent').addClass('hidden');
+      $('#btn-restart-agent').removeClass('hidden');
     } else {
-      $('#btn-stop-agent').addClass('hidden');
+      // Show Start button when stopped
+      $('#btn-start-agent').removeClass('hidden');
+      $('#btn-restart-agent').addClass('hidden');
     }
   }
 
@@ -3542,7 +3572,7 @@
     var projectId = state.selectedProjectId;
     setQuickActionLoading(projectId, true);
     showContentLoading('Stopping agent...');
-    $('#btn-stop-agent').prop('disabled', true);
+    $('#btn-restart-agent').prop('disabled', true);
 
     api.stopAgent(projectId)
       .done(function() {
@@ -3562,7 +3592,7 @@
         // Only hide loading and re-enable button if still viewing the same project
         if (state.selectedProjectId === projectId) {
           hideContentLoading();
-          $('#btn-stop-agent').prop('disabled', false);
+          $('#btn-restart-agent').prop('disabled', false);
         }
       });
   }
@@ -3575,7 +3605,7 @@
     var permissionMode = state.permissionMode;
 
     showToast('Restarting agent...', 'info');
-    $('#btn-stop-agent').prop('disabled', true);
+    $('#btn-restart-agent').prop('disabled', true);
 
     // Helper function to start agent with delay
     function startAgentWithDelay() {
@@ -3602,7 +3632,7 @@
           updateProjectStatusById(projectId, 'stopped');
         })
         .always(function() {
-          $('#btn-stop-agent').prop('disabled', false);
+          $('#btn-restart-agent').prop('disabled', false);
         });
     }
 
@@ -3619,7 +3649,7 @@
         })
         .fail(function(xhr) {
           showErrorToast(xhr, 'Failed to stop agent for restart');
-          $('#btn-stop-agent').prop('disabled', false);
+          $('#btn-restart-agent').prop('disabled', false);
         });
     }
   }
@@ -4248,7 +4278,7 @@
     if (!isActive) {
       // Hide Ralph Loop UI
       showAgentRunningIndicator(false);
-      $('#btn-stop-agent').addClass('hidden');
+      $('#btn-restart-agent').addClass('hidden');
       $('#btn-ralph-loop-pause').addClass('hidden');
       $('#btn-agent-mode').addClass('hidden');
       $('#form-send-message').removeClass('opacity-50');
@@ -4268,7 +4298,7 @@
       showAgentRunningIndicator(true, statusText);
 
       // Show appropriate buttons
-      $('#btn-stop-agent').removeClass('hidden');
+      $('#btn-restart-agent').removeClass('hidden');
       $('#btn-agent-mode').removeClass('hidden');  // Show Agent Mode button
 
       // Update pause button with appropriate state
@@ -4323,6 +4353,34 @@
       });
   }
 
+  function handleOptimizationProgress(projectId, data) {
+    if (projectId !== state.selectedProjectId || !state.claudeOptimizationPending) {
+      return;
+    }
+
+    // Update progress in the modal
+    ModalsModule.updateOptimizationProgress(data.message || 'Optimizing...');
+  }
+
+  function handleOptimizationComplete(projectId, data) {
+    if (projectId !== state.selectedProjectId || !state.claudeOptimizationPending) {
+      return;
+    }
+
+    state.claudeOptimizationPending = false;
+
+    if (!data.result || !data.result.success) {
+      ModalsModule.hideOptimizationLoadingMask();
+      showToast('Optimization failed: ' + (data.result?.error || 'Unknown error'), 'error');
+      // Reset the optimize button
+      $('#btn-optimize-claude-file').html('<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Optimize').prop('disabled', false);
+      return;
+    }
+
+    // Show the result in the modal
+    ModalsModule.showOptimizationResult(data.result);
+  }
+
   function updateProjectStatusById(projectId, status) {
     var project = findProjectById(projectId);
 
@@ -4339,7 +4397,7 @@
 
   function updateStopRestartButton(projectId) {
     var project = findProjectById(projectId);
-    var $button = $('#btn-stop-agent');
+    var $button = $('#btn-restart-agent');
 
     if (project && project.status === 'running') {
       // Show Stop
@@ -4553,6 +4611,12 @@
           DebugModal.handleFrontendError(message.data);
         }
         break;
+      case 'optimization_progress':
+        handleOptimizationProgress(message.projectId, message.data);
+        break;
+      case 'optimization_complete':
+        handleOptimizationComplete(message.projectId, message.data);
+        break;
     }
   }
 
@@ -4664,6 +4728,38 @@
         project.isWaitingForInput = false;
         updateWaitingIndicator(false);
         renderProjectList();
+      }
+    }
+
+    // Check for optimization response
+    if (state.claudeOptimizationPending && message.type === 'assistant' && message.content) {
+      if (message.content.includes('OPTIMIZED_CONTENT:') && message.content.includes('SUMMARY:')) {
+        // Extract optimized content
+        var match = message.content.match(/OPTIMIZED_CONTENT:\s*([\s\S]*?)\s*SUMMARY:/);
+        if (match && match[1]) {
+          var optimizedContent = match[1].trim();
+          // Update the editor with optimized content
+          $('#claude-file-editor').val(optimizedContent);
+          $('#btn-save-claude-file').removeClass('hidden');
+          showToast('CLAUDE.md optimized! Review changes and save.', 'success');
+        }
+        state.claudeOptimizationPending = false;
+      }
+    }
+
+    // Check for commit message response
+    if (state.gitCommitMessagePending && message.type === 'assistant' && message.content) {
+      // Check if it looks like a commit message (short, no markdown, conventional format)
+      var lines = message.content.trim().split('\n');
+      if (lines.length === 1 || (lines.length === 2 && lines[1] === '')) {
+        var commitMsg = lines[0].trim();
+        // Basic validation for conventional commit format
+        if (commitMsg.match(/^(feat|fix|docs|style|refactor|test|chore|perf|build|ci)(\(.+\))?:\s*.+/i) ||
+            commitMsg.length < 100) {
+          $('#git-commit-message').val(commitMsg);
+          showToast('Commit message generated!', 'success');
+          state.gitCommitMessagePending = false;
+        }
       }
     }
   }
@@ -5160,7 +5256,8 @@
       Formatters: Formatters,
       FileBrowser: FileBrowser,
       marked: window.marked,
-      hljs: window.hljs
+      hljs: window.hljs,
+      findProjectById: findProjectById
     });
 
     ConversationHistoryModule.init({

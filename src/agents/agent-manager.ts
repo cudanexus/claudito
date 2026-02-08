@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import {
   ClaudeAgent,
   DefaultClaudeAgent,
@@ -42,6 +43,12 @@ export { QueuedProject } from './agent-queue';
 export { LoopState as AgentLoopState } from './autonomous-loop-orchestrator';
 export { TrackedProcessInfo, OrphanCleanupResult } from './process-tracker';
 
+export interface OneOffAgentOptions {
+  projectId: string;
+  message: string;
+  permissionMode?: 'acceptEdits' | 'plan';
+}
+
 export interface AgentManagerEvents {
   message: (projectId: string, message: AgentMessage) => void;
   status: (projectId: string, status: AgentStatus) => void;
@@ -52,6 +59,8 @@ export interface AgentManagerEvents {
   milestoneFailed: (projectId: string, milestone: MilestoneRef | null, reason: string) => void;
   loopCompleted: (projectId: string) => void;
   sessionRecovery: (projectId: string, oldConversationId: string, newConversationId: string, reason: string) => void;
+  oneOffMessage: (oneOffId: string, message: AgentMessage) => void;
+  oneOffStatus: (oneOffId: string, status: AgentStatus) => void;
 }
 
 export interface AgentResourceStatus {
@@ -117,6 +126,8 @@ export interface AgentManager {
   restartAllRunningAgents(): Promise<void>;
   restartProjectAgent(projectId: string): Promise<void>;
   getRunningProjectIds(): string[];
+  startOneOffAgent(options: OneOffAgentOptions): Promise<string>;
+  stopOneOffAgent(oneOffId: string): Promise<void>;
   on<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
   off<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
 }
@@ -164,6 +175,7 @@ type EventListeners = {
  */
 export class DefaultAgentManager implements AgentManager {
   private readonly agents: Map<string, ClaudeAgent> = new Map();
+  private readonly oneOffAgents: Map<string, ClaudeAgent> = new Map();
   private readonly agentQueue: AgentQueue;
   private readonly sessionManager: SessionManager;
   private readonly loopOrchestrator: AutonomousLoopOrchestrator;
@@ -188,6 +200,8 @@ export class DefaultAgentManager implements AgentManager {
     milestoneFailed: new Set(),
     loopCompleted: new Set(),
     sessionRecovery: new Set(),
+    oneOffMessage: new Set(),
+    oneOffStatus: new Set(),
   };
   private waitingVersions: Map<string, number> = new Map();
   private queuedMessages: Map<string, string[]> = new Map();
@@ -745,6 +759,73 @@ export class DefaultAgentManager implements AgentManager {
       });
       throw error;
     }
+  }
+
+  async startOneOffAgent(options: OneOffAgentOptions): Promise<string> {
+    const project = await this.projectRepository.findById(options.projectId);
+
+    if (!project) {
+      throw new Error(`Project not found: ${options.projectId}`);
+    }
+
+    const oneOffId = `oneoff-${uuidv4()}`;
+
+    this.logger.info('Starting one-off agent', {
+      oneOffId,
+      projectId: options.projectId,
+    });
+
+    const settings = await this.settingsRepository.get();
+    const projectOverrides = project.permissionOverrides ?? null;
+    const permArgs = this.permissionGenerator.generateArgs(settings.claudePermissions, projectOverrides);
+
+    const permissionConfig: PermissionConfig = {
+      skipPermissions: permArgs.skipPermissions,
+      allowedTools: permArgs.allowedTools,
+      disallowedTools: permArgs.disallowedTools,
+      permissionMode: options.permissionMode || permArgs.permissionMode,
+    };
+
+    const model = await this.getModelForProject(options.projectId);
+
+    const agent = this.agentFactory.create({
+      projectId: options.projectId,
+      projectPath: project.path,
+      mode: 'interactive',
+      permissions: permissionConfig,
+      model,
+    });
+
+    this.oneOffAgents.set(oneOffId, agent);
+    this.setupOneOffAgentListeners(oneOffId, agent);
+    agent.start(options.message);
+
+    return oneOffId;
+  }
+
+  async stopOneOffAgent(oneOffId: string): Promise<void> {
+    const agent = this.oneOffAgents.get(oneOffId);
+
+    if (!agent) {
+      return;
+    }
+
+    await agent.stop();
+    this.oneOffAgents.delete(oneOffId);
+  }
+
+  private setupOneOffAgentListeners(oneOffId: string, agent: ClaudeAgent): void {
+    agent.on('message', (message: AgentMessage) => {
+      this.emit('oneOffMessage', oneOffId, message);
+    });
+
+    agent.on('status', (status: AgentStatus) => {
+      this.emit('oneOffStatus', oneOffId, status);
+    });
+
+    agent.on('exit', () => {
+      this.oneOffAgents.delete(oneOffId);
+    });
   }
 
   getRunningProjectIds(): string[] {

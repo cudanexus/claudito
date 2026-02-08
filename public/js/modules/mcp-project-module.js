@@ -137,13 +137,9 @@
       };
     });
 
-    // Check if any servers are enabled
-    var hasEnabledServers = Object.values(serverOverrides).some(function(override) {
-      return override.enabled;
-    });
-
+    // Always set enabled: true when saving explicit overrides
     var overrides = {
-      enabled: hasEnabledServers,
+      enabled: true,  // This means "use project overrides" not "any server enabled"
       serverOverrides: serverOverrides
     };
 
@@ -170,6 +166,34 @@
       });
   }
 
+  function clearProjectOverrides() {
+    if (!currentProjectId) return;
+
+    if (!confirm('Reset to global MCP server settings? This will remove all project-specific configurations.')) {
+      return;
+    }
+
+    // Disable buttons while clearing
+    $('#btn-save-project-mcp').prop('disabled', true);
+
+    // Send request to clear overrides
+    api.updateProjectMcpOverrides(currentProjectId, {
+      enabled: false,
+      serverOverrides: {}
+    })
+    .done(function() {
+      showToast('Reset to global MCP defaults', 'success');
+      projectOverrides = null;
+      renderMcpServers();
+    })
+    .fail(function(xhr) {
+      showToast('Failed to reset MCP settings: ' + (xhr.responseJSON?.error || 'Unknown error'), 'error');
+    })
+    .always(function() {
+      $('#btn-save-project-mcp').prop('disabled', false);
+    });
+  }
+
   function setupHandlers() {
     // Save button handler
     $('#btn-save-project-mcp').on('click', function() {
@@ -185,6 +209,7 @@
 
   return {
     init: init,
-    openProjectMcpModal: openProjectMcpModal
+    openProjectMcpModal: openProjectMcpModal,
+    clearProjectOverrides: clearProjectOverrides
   };
 }));

@@ -100,6 +100,8 @@
         files: [],
         currentFile: null
       },
+      claudeOptimizationPending: false,
+      gitCommitMessagePending: false,
 
       // Pending operations
       pendingDeleteId: null,

@@ -8,6 +8,7 @@ export {
   AgentResourceStatus,
   ImageData,
   FullAgentStatus,
+  OneOffAgentOptions,
 } from './agent-manager';
 
 // Export from new modules

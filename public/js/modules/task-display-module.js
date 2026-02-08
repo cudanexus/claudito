@@ -452,11 +452,13 @@
 
     html += '</div>';
 
-    // Settings info
-    html += '<div class="mt-4 pt-3 border-t border-gray-700">';
-    html += '<p class="text-xs text-gray-500">CLAUDE.md max size threshold: ' + data.settings.claudeMdMaxSizeKB + ' KB</p>';
-    html += '<p class="text-xs text-gray-500 mt-1">Change this in Settings to adjust the warning threshold.</p>';
-    html += '</div>';
+    // Settings info - only show if settings data is available
+    if (data.settings && data.settings.claudeMdMaxSizeKB) {
+      html += '<div class="mt-4 pt-3 border-t border-gray-700">';
+      html += '<p class="text-xs text-gray-500">CLAUDE.md max size threshold: ' + data.settings.claudeMdMaxSizeKB + ' KB</p>';
+      html += '<p class="text-xs text-gray-500 mt-1">Change this in Settings to adjust the warning threshold.</p>';
+      html += '</div>';
+    }
 
     return html;
   }
@@ -487,7 +489,14 @@
 
     api.getOptimizations(projectId)
       .done(function(data) {
-        var count = (data.optimizations || []).length;
+        // Count non-passed checks as optimizations
+        var checks = data.checks || data.optimizations || [];
+        var count = 0;
+        checks.forEach(function(check) {
+          if (check.status !== 'passed') {
+            count++;
+          }
+        });
         updateOptimizationsBadge(count);
       })
       .fail(function() {

@@ -13,6 +13,7 @@ import {
   MarkdownRoadmapEditor,
   ClaudeRoadmapGenerator,
   DefaultInstructionGenerator,
+  ClaudeOptimizationService,
 } from '../services';
 import { createGitService } from '../services/git-service';
 import { createShellService, ShellService } from '../services/shell-service';
@@ -36,6 +37,7 @@ let sharedConversationRepository: FileConversationRepository | null = null;
 let sharedProjectRepository: FileProjectRepository | null = null;
 let sharedWebSocketServer: ProjectWebSocketServer | null = null;
 let sharedProjectDiscoveryService: ProjectDiscoveryService | null = null;
+let sharedOptimizationService: ClaudeOptimizationService | null = null;
 
 export interface ApiRouterDependencies {
   agentManager?: AgentManager;
@@ -209,6 +211,9 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
   const shellEnabled = deps.shellEnabled !== false;
   const shellService = shellEnabled ? getOrCreateShellService() : null;
 
+  // Optimization service
+  const optimizationService = getOrCreateOptimizationService(agentManager);
+
   // Project routes
   router.use('/projects', createProjectsRouter({
     projectRepository,
@@ -225,6 +230,7 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
     shellEnabled,
     ralphLoopService: getOrCreateRalphLoopService(projectRepository, settingsRepository),
     projectDiscoveryService: getOrCreateProjectDiscoveryService(projectRepository),
+    optimizationService,
   }));
 
   return router;
@@ -332,4 +338,21 @@ function getOrCreateProjectDiscoveryService(projectRepository: FileProjectReposi
 
 export function getProjectDiscoveryService(): ProjectDiscoveryService | null {
   return sharedProjectDiscoveryService;
+}
+
+function getOrCreateOptimizationService(
+  agentManager: AgentManager
+): ClaudeOptimizationService {
+  if (!sharedOptimizationService) {
+    const logger = getLogger('optimization');
+    sharedOptimizationService = new ClaudeOptimizationService(
+      logger,
+      agentManager
+    );
+  }
+  return sharedOptimizationService;
+}
+
+export function getOptimizationService(): ClaudeOptimizationService | null {
+  return sharedOptimizationService;
 }

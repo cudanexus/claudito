@@ -291,8 +291,8 @@ export function createCoreRouter(deps: ProjectRouterDependencies): Router {
     const id = req.params['id'] as string;
     const body = req.body as McpOverridesBody;
 
-    // If enabled is false, clear overrides by passing null
-    if (body.enabled === false) {
+    // Only clear overrides if explicitly requested (empty overrides + enabled false)
+    if (body.enabled === false && (!body.serverOverrides || Object.keys(body.serverOverrides).length === 0)) {
       const overrides = await projectRepository.updateMcpOverrides(id, null);
 
       // Restart agent if running
@@ -308,8 +308,9 @@ export function createCoreRouter(deps: ProjectRouterDependencies): Router {
       return;
     }
 
+    // Save the overrides as provided
     const overrides = await projectRepository.updateMcpOverrides(id, {
-      enabled: body.enabled ?? false,
+      enabled: body.enabled ?? true,
       serverOverrides: body.serverOverrides || {}
     });
 
