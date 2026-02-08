@@ -239,6 +239,7 @@ export interface McpServerConfig {
 
   // Common settings
   description?: string;          // User description
+  autoApproveTools?: boolean;    // Auto-approve all tools from this server (default: true)
 }
 
 export interface McpSettings {

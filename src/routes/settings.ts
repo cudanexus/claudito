@@ -67,7 +67,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
   const router = Router();
   const { settingsRepository, onSettingsChange } = deps;
 
-  router.get('/', asyncHandler(async (_req: Request, res: Response) => {
+  router.get('/', asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const settings = await settingsRepository.get();
     res.json(settings);
   }));
@@ -81,7 +81,7 @@ export function createSettingsRouter(deps: SettingsRouterDependencies): Router {
     res.json({ models });
   });
 
-  router.put('/', asyncHandler(async (req: Request, res: Response) => {
+  router.put('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const body = req.body as UpdateSettingsBody;
     const { maxConcurrentAgents, claudePermissions, agentPromptTemplate, sendWithCtrlEnter, historyLimit, enableDesktopNotifications, appendSystemPrompt, promptTemplates, mcp } = body;
 

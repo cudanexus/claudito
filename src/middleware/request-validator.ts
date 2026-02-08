@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { ValidationError } from '../utils/errors';
 
 /**
@@ -147,10 +147,10 @@ export function validateArray<T>(
 
 // Common validation middleware factories
 
-export function validateCreateProject() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateCreateProject(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body;
+      const body = req.body as Record<string, unknown>;
 
       req.body = {
         name: validateString(body.name, 'name', { required: true, minLength: 1, maxLength: 100 }),
@@ -165,8 +165,8 @@ export function validateCreateProject() {
   };
 }
 
-export function validateProjectId() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateProjectId(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
       const projectId = validateString(req.params['id'], 'projectId', {
         required: true,
@@ -181,8 +181,8 @@ export function validateProjectId() {
   };
 }
 
-export function validateNumericParam(paramName: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateNumericParam(paramName: string): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
       const value = validateNumber(req.params[paramName], paramName, {
         required: true,
@@ -198,8 +198,8 @@ export function validateNumericParam(paramName: string) {
   };
 }
 
-export function validateQueryLimit(maxLimit = 1000) {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateQueryLimit(maxLimit = 1000): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
       const limit = validateNumber(req.query.limit, 'limit', {
         integer: true,
@@ -215,13 +215,13 @@ export function validateQueryLimit(maxLimit = 1000) {
   };
 }
 
-export function validateRoadmapPrompt() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateRoadmapPrompt(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body;
+      const body = req.body as Record<string, unknown>;
 
       req.body = {
-        prompt: validateString(body.prompt, 'prompt', { required: true, minLength: 1, maxLength: 10000 }),
+        prompt: validateString(body['prompt'], 'prompt', { required: true, minLength: 1, maxLength: 10000 }),
       };
 
       next();
@@ -231,15 +231,15 @@ export function validateRoadmapPrompt() {
   };
 }
 
-export function validateDeleteTask() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateDeleteTask(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body;
+      const body = req.body as Record<string, unknown>;
 
       req.body = {
-        phaseId: validateString(body.phaseId, 'phaseId', { required: true }),
-        milestoneId: validateString(body.milestoneId, 'milestoneId', { required: true }),
-        taskIndex: validateNumber(body.taskIndex, 'taskIndex', {
+        phaseId: validateString(body['phaseId'], 'phaseId', { required: true }),
+        milestoneId: validateString(body['milestoneId'], 'milestoneId', { required: true }),
+        taskIndex: validateNumber(body['taskIndex'], 'taskIndex', {
           required: true,
           integer: true,
           min: 0,
@@ -253,27 +253,27 @@ export function validateDeleteTask() {
   };
 }
 
-export function validateAgentMessage() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateAgentMessage(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body;
+      const body = req.body as Record<string, unknown>;
 
       req.body = {
-        message: validateString(body.message, 'message', { minLength: 1, maxLength: 100000 }),
-        images: validateArray(body.images, 'images', (item) => {
+        message: validateString(body['message'], 'message', { minLength: 1, maxLength: 100000 }),
+        images: validateArray(body['images'], 'images', (item) => {
           if (typeof item !== 'object' || !item) {
             throw new Error('Invalid image data');
           }
-          const img = item as any;
+          const img = item as { mediaType: unknown; data: unknown };
           return {
-            mediaType: validateString(img.mediaType, 'mediaType', { required: true }),
-            data: validateString(img.data, 'data', { required: true }),
+            mediaType: validateString(img['mediaType'], 'mediaType', { required: true }),
+            data: validateString(img['data'], 'data', { required: true }),
           };
         }),
-        sessionId: validateString(body.sessionId, 'sessionId', {
+        sessionId: validateString(body['sessionId'], 'sessionId', {
           pattern: /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
         }),
-        permissionMode: validateString(body.permissionMode, 'permissionMode', {
+        permissionMode: validateString(body['permissionMode'], 'permissionMode', {
           pattern: /^(acceptEdits|plan)$/,
         }),
       };
@@ -285,13 +285,13 @@ export function validateAgentMessage() {
   };
 }
 
-export function validateModelUpdate() {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function validateModelUpdate(): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body;
+      const body = req.body as Record<string, unknown>;
 
       req.body = {
-        model: validateString(body.model, 'model'),
+        model: validateString(body['model'], 'model'),
       };
 
       next();

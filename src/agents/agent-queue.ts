@@ -18,7 +18,7 @@ export class AgentQueue {
   private readonly queue: QueuedProject[] = [];
   private readonly queuedProjects = new Set<string>(); // O(1) lookup optimization
   private readonly logger: Logger;
-  private readonly listeners: Map<keyof AgentQueueEvents, Set<Function>> = new Map();
+  private readonly listeners: Map<keyof AgentQueueEvents, Set<(...args: unknown[]) => void>> = new Map();
 
   constructor() {
     this.logger = getLogger('agent-queue');
@@ -165,7 +165,7 @@ export class AgentQueue {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener);
+    this.listeners.get(event)!.add(listener as (...args: unknown[]) => void);
   }
 
   /**
@@ -174,7 +174,7 @@ export class AgentQueue {
   off<K extends keyof AgentQueueEvents>(event: K, listener: AgentQueueEvents[K]): void {
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
-      eventListeners.delete(listener);
+      eventListeners.delete(listener as (...args: unknown[]) => void);
     }
   }
 

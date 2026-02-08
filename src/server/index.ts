@@ -3,7 +3,7 @@ import { Server, createServer } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { AppConfig } from '../config';
-import { createApiRouter, getAgentManager, getRoadmapGenerator, getShellService, getRalphLoopService, getConversationRepository, getProjectRepository } from '../routes';
+import { createApiRouter, getAgentManager, getRoadmapGenerator, getShellService, getRalphLoopService, getConversationRepository, getProjectRepository, setWebSocketServer } from '../routes';
 import { createAuthRouter } from '../routes/auth';
 import { DefaultWebSocketServer, ProjectWebSocketServer } from '../websocket';
 import { createErrorHandler, formatAccessibleUrls } from '../utils';
@@ -47,9 +47,22 @@ export function createExpressApp(options: ExpressAppOptions = {}): Application {
     app.use('/api/auth', createAuthRouter({ authService: options.authService }));
   }
 
-  // Health check (unprotected)
-  app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', version: packageJson.version });
+  // Health check (optionally checks auth when ?auth=1)
+  app.get('/api/health', (req: Request, res: Response) => {
+    // If auth query parameter is present, check authentication
+    if (req.query.auth === '1' && options.authService) {
+      const sessionId = parseCookie(req.headers.cookie || '', COOKIE_NAME);
+
+      if (!sessionId || !options.authService.validateSession(sessionId)) {
+        return res.status(401).json({
+          error: 'Unauthorized',
+          code: 'AUTH_REQUIRED'
+        });
+      }
+    }
+
+    // Return normal health response
+    return res.json({ status: 'ok', version: packageJson.version });
   });
 
   // Root route - check auth and redirect to login if needed
@@ -63,6 +76,18 @@ export function createExpressApp(options: ExpressAppOptions = {}): Application {
       }
     }
     serveIndexWithCacheBusting(publicPath, res);
+  });
+
+  // Add middleware to set proper Content-Type headers for TV browser compatibility
+  app.use((req, res, next) => {
+    if (req.path.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    } else if (req.path.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css; charset=utf-8');
+    } else if (req.path.endsWith('.json')) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
+    next();
   });
 
   app.use(express.static(publicPath));
@@ -245,6 +270,9 @@ export class ExpressHttpServer implements HttpServer {
       projectRepository: getProjectRepository() || undefined,
     });
     this.wsServer.initialize(this.httpServer);
+
+    // Make WebSocket server available to routes
+    setWebSocketServer(this.wsServer);
   }
 
   private logAccessibleUrls(): void {

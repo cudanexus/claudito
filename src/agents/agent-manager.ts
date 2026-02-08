@@ -16,10 +16,10 @@ import {
 import { DefaultPermissionGenerator, PermissionGenerator } from '../services/permission-generator';
 import {
   ProjectRepository,
-  MilestoneItemRef,
   ConversationRepository,
   SettingsRepository,
   McpServerConfig,
+  McpOverrides,
   ProjectStatus,
 } from '../repositories';
 import { InstructionGenerator, RoadmapParser } from '../services';
@@ -28,7 +28,7 @@ import { DEFAULT_MODEL } from '../config/models';
 
 // Import new modules
 import { AgentQueue, QueuedProject } from './agent-queue';
-import { SessionManager, SessionRecoveryResult } from './session-manager';
+import { SessionManager } from './session-manager';
 import {
   AutonomousLoopOrchestrator,
   MilestoneRef,
@@ -36,6 +36,11 @@ import {
   AgentCompletionResponse
 } from './autonomous-loop-orchestrator';
 import { ProcessTracker, TrackedProcessInfo, OrphanCleanupResult } from './process-tracker';
+
+// Re-export types for testing
+export { QueuedProject } from './agent-queue';
+export { LoopState as AgentLoopState } from './autonomous-loop-orchestrator';
+export { TrackedProcessInfo, OrphanCleanupResult } from './process-tracker';
 
 export interface AgentManagerEvents {
   message: (projectId: string, message: AgentMessage) => void;
@@ -110,6 +115,7 @@ export interface AgentManager {
   getTrackedProcesses(): TrackedProcessInfo[];
   cleanupOrphanProcesses(): Promise<OrphanCleanupResult>;
   restartAllRunningAgents(): Promise<void>;
+  restartProjectAgent(projectId: string): Promise<void>;
   getRunningProjectIds(): string[];
   on<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
   off<K extends keyof AgentManagerEvents>(event: K, listener: AgentManagerEvents[K]): void;
@@ -185,6 +191,7 @@ export class DefaultAgentManager implements AgentManager {
   };
   private waitingVersions: Map<string, number> = new Map();
   private queuedMessages: Map<string, string[]> = new Map();
+  private pendingPlans: Map<string, { planContent: string; sessionId: string | null }> = new Map();
   private _maxConcurrentAgents: number;
 
   constructor({
@@ -257,8 +264,12 @@ export class DefaultAgentManager implements AgentManager {
       throw new Error('Agent is already running for this project');
     }
 
+    if (this.agentQueue.isQueued(projectId)) {
+      throw new Error('Agent is already queued for this project');
+    }
+
     if (this.agents.size >= this.maxConcurrentAgents) {
-      await this.addToQueue(projectId, instructions);
+      this.addToQueue(projectId, instructions);
       return;
     }
 
@@ -296,10 +307,23 @@ export class DefaultAgentManager implements AgentManager {
       }
     }
 
-    // Get permission config
+    // Get settings
     const settings = await this.settingsRepository.get();
     const projectOverrides = project.permissionOverrides ?? null;
-    const permArgs = this.permissionGenerator.generateArgs(settings.claudePermissions, projectOverrides);
+
+    // Get model
+    const model = await this.getModelForProject(projectId);
+
+    // Get enabled MCP servers
+    const globalMcpServers = settings.mcp?.enabled
+      ? (settings.mcp.servers || []).filter((server) => server.enabled)
+      : [];
+
+    // Apply per-project MCP overrides
+    const mcpServers = this.applyMcpOverrides(globalMcpServers, project.mcpOverrides);
+
+    // Generate permission config with MCP servers
+    const permArgs = this.permissionGenerator.generateArgs(settings.claudePermissions, projectOverrides, mcpServers);
 
     const permissionConfig: PermissionConfig = {
       skipPermissions: permArgs.skipPermissions,
@@ -307,9 +331,6 @@ export class DefaultAgentManager implements AgentManager {
       disallowedTools: permArgs.disallowedTools,
       permissionMode: options?.permissionMode || permArgs.permissionMode,
     };
-
-    // Get model
-    const model = await this.getModelForProject(projectId);
 
     // Create agent
     const agent = this.agentFactory.create({
@@ -320,7 +341,7 @@ export class DefaultAgentManager implements AgentManager {
       sessionId: sessionResult.sessionId,
       isNewSession: sessionResult.isNewSession,
       model,
-      mcpServers: settings.mcp.servers,
+      mcpServers,
     });
 
     // Store agent
@@ -328,7 +349,7 @@ export class DefaultAgentManager implements AgentManager {
     this.setupAgentListeners(agent);
 
     // Track process when it starts
-    const statusHandler = (status: AgentStatus) => {
+    const statusHandler = (status: AgentStatus): void => {
       if (status === 'running' && agent.processInfo) {
         const processInfo = agent.processInfo;
         this.processTracker.trackProcess(projectId, processInfo.pid);
@@ -339,7 +360,7 @@ export class DefaultAgentManager implements AgentManager {
     agent.on('status', statusHandler);
 
     // Start agent
-    await agent.start(initialInstructions || '');
+    agent.start(initialInstructions || '');
   }
 
   private buildMultimodalContent(text: string, images?: ImageData[]): string {
@@ -347,11 +368,30 @@ export class DefaultAgentManager implements AgentManager {
       return text;
     }
 
-    let content = text;
+    // Build Claude API-compatible JSON content blocks
+    const contentBlocks: Array<any> = [];
+
+    // Add images first
     for (const image of images) {
-      content += `\n\n![Image](data:${image.type};base64,${image.data})`;
+      contentBlocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: image.type,
+          data: image.data
+        }
+      });
     }
-    return content;
+
+    // Add text last
+    if (text) {
+      contentBlocks.push({
+        type: 'text',
+        text: text
+      });
+    }
+
+    return JSON.stringify(contentBlocks);
   }
 
   sendInput(projectId: string, input: string, images?: ImageData[]): void {
@@ -360,7 +400,40 @@ export class DefaultAgentManager implements AgentManager {
       throw new Error('No agent running for this project');
     }
 
+    if (agent.mode !== 'interactive') {
+      throw new Error('Agent is not in interactive mode');
+    }
+
+    // Check if this is a response to a pending plan approval
+    const pendingPlan = this.pendingPlans.get(projectId);
+    if (pendingPlan && agent.isWaitingForInput) {
+      // Handle plan approval response
+      void this.handlePlanApprovalResponse(projectId, input, pendingPlan);
+      return;
+    }
+
     const contentToSend = images ? this.buildMultimodalContent(input, images) : input;
+
+    // Save user message to conversation
+    const conversationId = agent.sessionId;
+    if (conversationId) {
+      const userMessage: AgentMessage = {
+        type: 'user',
+        content: input, // Save original input without image data
+        timestamp: new Date().toISOString(),
+      };
+
+      this.trackMessageSave(
+        this.conversationRepository.addMessage(projectId, conversationId, userMessage)
+      ).catch((err) => {
+        this.logger.error('Failed to save user message to conversation', {
+          projectId,
+          conversationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     agent.sendInput(contentToSend);
   }
 
@@ -433,7 +506,7 @@ export class DefaultAgentManager implements AgentManager {
   }
 
   setMaxConcurrentAgents(max: number): void {
-    this._maxConcurrentAgents = max;
+    this._maxConcurrentAgents = Math.max(1, max);
     void this.processQueue();
   }
 
@@ -477,6 +550,13 @@ export class DefaultAgentManager implements AgentManager {
   }
 
   getQueuedMessageCount(projectId: string): number {
+    const agent = this.agents.get(projectId);
+    if (agent) {
+      // If agent is running, get its queue count
+      return agent.queuedMessageCount;
+    }
+
+    // If agent is not running, count messages in our queue
     const queuedMsg = this.queuedMessages.get(projectId);
     return (queuedMsg?.length || 0) + this.agentQueue.getQueuedMessageCount(projectId);
   }
@@ -488,6 +568,13 @@ export class DefaultAgentManager implements AgentManager {
   }
 
   removeQueuedMessage(projectId: string, index: number): boolean {
+    const agent = this.agents.get(projectId);
+    if (agent) {
+      // If agent is running, delegate to it
+      return agent.removeQueuedMessage(index);
+    }
+
+    // If agent is not running, manage the queue ourselves
     const queuedMsg = this.queuedMessages.get(projectId);
     if (queuedMsg && index < queuedMsg.length) {
       queuedMsg.splice(index, 1);
@@ -594,6 +681,72 @@ export class DefaultAgentManager implements AgentManager {
     }
   }
 
+  async restartProjectAgent(projectId: string): Promise<void> {
+    const agent = this.agents.get(projectId);
+    if (!agent || agent.status !== 'running') {
+      this.logger.warn('Cannot restart agent that is not running', { projectId });
+      return;
+    }
+
+    const agentInfo = {
+      projectId,
+      mode: agent.mode,
+      sessionId: agent.sessionId,
+      isNewSession: false,
+      permissionMode: agent.permissionMode,
+    };
+
+    this.logger.info('Restarting project agent', { projectId });
+
+    // Stop the agent
+    await this.stopAgent(projectId);
+
+    // Small delay to ensure clean shutdown
+    await this.delay(1000);
+
+    // Restart the agent
+    try {
+      if (agentInfo.mode === 'interactive') {
+        await this.startInteractiveAgent(projectId, {
+          sessionId: agentInfo.sessionId || undefined,
+          isNewSession: agentInfo.isNewSession,
+          permissionMode: agentInfo.permissionMode || undefined,
+        });
+      } else {
+        // For autonomous agents, regenerate instructions from roadmap
+        const project = await this.projectRepository.findById(projectId);
+        if (!project) {
+          throw new Error(`Project not found: ${projectId}`);
+        }
+
+        const roadmapPath = path.join(project.path, 'doc', 'ROADMAP.md');
+        const roadmapExists = await fs.promises
+          .access(roadmapPath)
+          .then(() => true)
+          .catch(() => false);
+
+        if (!roadmapExists) {
+          this.logger.warn('Cannot restart autonomous agent without roadmap', { projectId });
+          return;
+        }
+
+        const roadmapContent = await fs.promises.readFile(roadmapPath, 'utf-8');
+        const parsedRoadmap = this.roadmapParser.parse(roadmapContent);
+        const instructions = this.instructionGenerator.generate(parsedRoadmap, project.name);
+
+        await this.startAgent(projectId, instructions);
+      }
+
+      this.logger.info('Successfully restarted project agent', { projectId });
+    } catch (error) {
+      this.logger.error('Failed to restart project agent', {
+        projectId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      throw error;
+    }
+  }
+
   getRunningProjectIds(): string[] {
     return Array.from(this.agents.keys());
   }
@@ -619,7 +772,7 @@ export class DefaultAgentManager implements AgentManager {
       return;
     }
 
-    const instructions = await this.loopOrchestrator.generateMilestoneInstructions(
+    const instructions = this.loopOrchestrator.generateMilestoneInstructions(
       projectId,
       project.name,
       milestone
@@ -683,6 +836,14 @@ export class DefaultAgentManager implements AgentManager {
 
     const model = await this.getModelForProject(projectId);
 
+    // Get enabled MCP servers
+    const globalMcpServers = settings.mcp?.enabled
+      ? (settings.mcp.servers || []).filter((server) => server.enabled)
+      : [];
+
+    // Apply per-project MCP overrides
+    const mcpServers = this.applyMcpOverrides(globalMcpServers, project.mcpOverrides);
+
     const agent = this.agentFactory.create({
       projectId,
       projectPath: project.path,
@@ -691,14 +852,14 @@ export class DefaultAgentManager implements AgentManager {
       sessionId: conversationId,
       isNewSession: false,
       model,
-      mcpServers: settings.mcp.servers,
+      mcpServers,
     });
 
     this.agents.set(projectId, agent);
     this.setupAgentListeners(agent);
 
     // Track process when it starts
-    const statusHandler = (status: AgentStatus) => {
+    const statusHandler = (status: AgentStatus): void => {
       if (status === 'running' && agent.processInfo) {
         const processInfo = agent.processInfo;
         this.processTracker.trackProcess(projectId, processInfo.pid);
@@ -708,10 +869,10 @@ export class DefaultAgentManager implements AgentManager {
     };
     agent.on('status', statusHandler);
 
-    await agent.start(instructions);
+    agent.start(instructions);
   }
 
-  private async addToQueue(projectId: string, instructions: string): Promise<void> {
+  private addToQueue(projectId: string, instructions: string): void {
     this.logger.info('Adding project to queue', {
       projectId,
       queuePosition: this.agentQueue.getQueueLength() + 1,
@@ -753,7 +914,7 @@ export class DefaultAgentManager implements AgentManager {
 
   private trackMessageSave<T>(promise: Promise<T>): Promise<T> {
     this.pendingMessageSaves.add(promise);
-    promise.finally(() => this.pendingMessageSaves.delete(promise));
+    void promise.finally(() => this.pendingMessageSaves.delete(promise));
     return promise;
   }
 
@@ -762,6 +923,8 @@ export class DefaultAgentManager implements AgentManager {
       this.logger.info('Waiting for pending message saves', { count: this.pendingMessageSaves.size });
       await Promise.allSettled(this.pendingMessageSaves);
     }
+    // Flush the conversation repository
+    await this.conversationRepository.flush();
   }
 
   private setupAgentListeners(agent: ClaudeAgent): void {
@@ -773,19 +936,9 @@ export class DefaultAgentManager implements AgentManager {
       // Get conversation ID - it should equal session ID
       const conversationId = agent.sessionId;
       if (conversationId) {
-        // Save messages to conversation based on type
-        // User messages come in as 'user' type, assistant messages as various types
-        if (message.type === 'user') {
-          this.trackMessageSave(
-            this.conversationRepository.addMessage(projectId, conversationId, message)
-          ).catch((err) => {
-            this.logger.error('Failed to save user message to conversation', {
-              projectId,
-              conversationId,
-              error: err.message,
-            });
-          });
-        } else if (message.type === 'stdout' || message.type === 'tool_use' || message.type === 'tool_result') {
+        // Save assistant messages to conversation
+        // Only save specific message types that represent assistant output
+        if (message.type === 'stdout' || message.type === 'tool_use' || message.type === 'tool_result') {
           // These are assistant messages
           this.trackMessageSave(
             this.conversationRepository.addMessage(projectId, conversationId, message)
@@ -793,7 +946,7 @@ export class DefaultAgentManager implements AgentManager {
             this.logger.error('Failed to save assistant message to conversation', {
               projectId,
               conversationId,
-              error: err.message,
+              error: err instanceof Error ? err.message : String(err),
             });
           });
         }
@@ -829,11 +982,16 @@ export class DefaultAgentManager implements AgentManager {
       void this.handleSessionNotFound(agent, sessionId);
     };
 
+    const exitPlanModeListener = (planContent: string): void => {
+      void this.handleExitPlanMode(agent, planContent);
+    };
+
     agent.on('message', messageListener);
     agent.on('status', statusListener);
     agent.on('waitingForInput', waitingListener);
     agent.on('exit', exitListener);
     agent.on('sessionNotFound', sessionNotFoundListener);
+    agent.on('exitPlanMode', exitPlanModeListener);
   }
 
   private async handleAgentExit(agent: ClaudeAgent, _code: number | null): Promise<void> {
@@ -893,6 +1051,102 @@ export class DefaultAgentManager implements AgentManager {
         status,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  }
+
+  private handleExitPlanMode(agent: ClaudeAgent, planContent: string): void {
+    const projectId = agent.projectId;
+    const sessionId = agent.sessionId;
+
+    // Check if we already have a pending plan for this project
+    if (this.pendingPlans.has(projectId)) {
+      this.logger.warn('Ignoring duplicate ExitPlanMode - already have pending plan', {
+        projectId,
+        sessionId,
+      });
+      return;
+    }
+
+    this.logger.info('ExitPlanMode detected, sending plan approval request to user', {
+      projectId,
+      sessionId,
+      planContentLength: planContent.length,
+    });
+
+    // Store the plan content for later use when user approves
+    this.pendingPlans.set(projectId, { planContent, sessionId });
+
+    // Send a plan_mode message to the frontend for user approval
+    const planModeMessage: AgentMessage = {
+      type: 'plan_mode',
+      content: 'Claude has finished creating a plan and is ready to implement it. Would you like to proceed?',
+      timestamp: new Date().toISOString(),
+      planModeInfo: {
+        action: 'exit',
+        planContent: planContent,
+      },
+    };
+    this.emit('message', projectId, planModeMessage);
+
+    // Mark agent as waiting for input
+    const waitingVersion = Date.now();
+    this.waitingVersions.set(projectId, waitingVersion);
+
+    this.emit('waitingForInput', projectId, true, waitingVersion);
+  }
+
+  private async handlePlanApprovalResponse(
+    projectId: string,
+    response: string,
+    pendingPlan: { planContent: string; sessionId: string | null }
+  ): Promise<void> {
+    // Clear the pending plan
+    this.pendingPlans.delete(projectId);
+
+    if (response.toLowerCase() === 'yes') {
+      // User approved the plan
+      this.logger.info('User approved plan, restarting agent with acceptEdits mode', { projectId });
+
+      // Stop the current agent
+      await this.stopAgent(projectId);
+
+      // Small delay to ensure clean shutdown
+      await this.delay(500);
+
+      // Restart with acceptEdits mode and pass the plan content as the initial message
+      await this.startInteractiveAgent(projectId, {
+        initialMessage: pendingPlan.planContent || undefined,
+        sessionId: pendingPlan.sessionId || undefined,
+        isNewSession: false,
+        permissionMode: 'acceptEdits',
+      });
+
+      // Emit a hidden message to indicate the restart happened
+      const hiddenMessage: AgentMessage = {
+        type: 'system',
+        content: '[Plan approved. Agent restarted with Accept Edits mode]',
+        timestamp: new Date().toISOString(),
+        hidden: true,
+      };
+      this.emit('message', projectId, hiddenMessage);
+    } else if (response.toLowerCase() === 'no') {
+      // User rejected the plan
+      this.logger.info('User rejected plan', { projectId });
+
+      // Send the rejection to Claude
+      const agent = this.agents.get(projectId);
+      if (agent) {
+        agent.sendInput('no');
+      }
+    } else {
+      // User wants changes - send their feedback to Claude
+      this.logger.info('User requested plan changes', { projectId });
+
+      // Send the feedback to Claude
+      const agent = this.agents.get(projectId);
+      if (agent) {
+        agent.sendInput(response);
+      }
     }
   }
 
@@ -957,10 +1211,32 @@ export class DefaultAgentManager implements AgentManager {
   ): void {
     this.listeners[event].forEach((listener) => {
       try {
-        (listener as Function)(...args);
+        (listener as (...args: Parameters<AgentManagerEvents[K]>) => void)(...args);
       } catch (error) {
         this.logger.error(`Error in ${event} listener`, { error });
       }
+    });
+  }
+
+  private applyMcpOverrides(
+    globalServers: McpServerConfig[],
+    overrides: McpOverrides | null | undefined
+  ): McpServerConfig[] {
+    // If no overrides, use all global servers
+    if (!overrides) {
+      return globalServers;
+    }
+
+    // If MCP is explicitly disabled for the project, return empty array
+    if (!overrides.enabled) {
+      return [];
+    }
+
+    // Filter global servers based on project overrides
+    return globalServers.filter((server) => {
+      const override = overrides.serverOverrides[server.id];
+      // If no specific override, default to enabled
+      return override?.enabled ?? true;
     });
   }
 

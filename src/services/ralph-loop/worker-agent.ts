@@ -1,8 +1,10 @@
-import { ChildProcess, spawn, exec, execFile } from 'child_process';
+import { ChildProcess, spawn, execFile } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'path';
+import * as fs from 'fs';
 
 import { getLogger, Logger } from '../../utils/logger';
+import { MessageBuilder } from '../../agents/message-builder';
 import {
   RalphLoopState,
   IterationSummary,
@@ -148,6 +150,7 @@ export class WorkerAgent {
   private collectedOutput: string = '';
   private filesModified: string[] = [];
   private tokensUsed: number = 0;
+  private mcpConfigPath: string | null = null;
   private startTime: number = 0;
   private isStopping: boolean = false;
 
@@ -203,6 +206,20 @@ export class WorkerAgent {
 
     this.isStopping = true;
     this.logger.info('Stopping worker agent');
+
+    // Clean up MCP config file if it exists
+    if (this.mcpConfigPath) {
+      try {
+        fs.unlinkSync(this.mcpConfigPath);
+        this.logger.debug('Deleted MCP config file', { path: this.mcpConfigPath });
+      } catch (error) {
+        this.logger.warn('Failed to delete MCP config file', {
+          path: this.mcpConfigPath,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      this.mcpConfigPath = null;
+    }
 
     this.process.stdout?.removeAllListeners('data');
     this.process.stderr?.removeAllListeners('data');
@@ -297,8 +314,13 @@ export class WorkerAgent {
       args.push('--append-system-prompt', this.appendSystemPrompt);
     }
 
-    // Add MCP servers
-    this.addMcpServerArgs(args);
+    // Generate MCP config file if we have servers
+    if (this.mcpServers && this.mcpServers.length > 0) {
+      this.mcpConfigPath = MessageBuilder.generateMcpConfig(this.mcpServers, 'ralph-worker');
+      if (this.mcpConfigPath) {
+        args.push('--mcp-config', this.mcpConfigPath);
+      }
+    }
 
     // Add plugin directory
     const pluginPath = path.join(this.projectPath, 'claudito-plugin');
@@ -312,40 +334,6 @@ export class WorkerAgent {
     return args;
   }
 
-  private addMcpServerArgs(args: string[]): void {
-    if (!this.mcpServers || this.mcpServers.length === 0) {
-      return;
-    }
-
-    for (const server of this.mcpServers) {
-      if (!server.enabled) continue;
-
-      if (server.type === 'stdio') {
-        const serverSpec = `${server.name}=stdio://${server.command}`;
-        if (server.args && server.args.length > 0) {
-          args.push('--mcp-server', `${serverSpec} ${server.args.join(' ')}`);
-        } else {
-          args.push('--mcp-server', serverSpec);
-        }
-
-        // Add environment variables
-        if (server.env) {
-          for (const [key, value] of Object.entries(server.env)) {
-            args.push('--mcp-server-env', `${server.name}:${key}=${value}`);
-          }
-        }
-      } else if (server.type === 'http') {
-        args.push('--mcp-server', `${server.name}=http://${server.url}`);
-
-        // Add headers
-        if (server.headers) {
-          for (const [key, value] of Object.entries(server.headers)) {
-            args.push('--mcp-server-header', `${server.name}:${key}=${value}`);
-          }
-        }
-      }
-    }
-  }
 
   private sendContext(context: string): void {
     if (!this.process?.stdin) {
@@ -439,6 +427,20 @@ export class WorkerAgent {
         const error = `Worker process exited with code ${code}`;
         this.emitter.emit('error', error);
         reject(new Error(error));
+      }
+
+      // Clean up MCP config file on exit
+      if (this.mcpConfigPath) {
+        try {
+          fs.unlinkSync(this.mcpConfigPath);
+          this.logger.debug('Deleted MCP config file on exit', { path: this.mcpConfigPath });
+        } catch (error) {
+          this.logger.warn('Failed to delete MCP config file on exit', {
+            path: this.mcpConfigPath,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        this.mcpConfigPath = null;
       }
 
       this.process = null;

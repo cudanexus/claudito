@@ -33,6 +33,30 @@
   }
 
   /**
+   * Process mermaid diagram direction - convert LR (left-right) to TD (top-down)
+   * to avoid diagrams being too wide for the container
+   */
+  function processMermaidDirection(code) {
+    // Replace common left-right orientations with top-down
+    var processed = code
+      .replace(/graph\s+LR\b/g, 'graph TD')
+      .replace(/flowchart\s+LR\b/g, 'flowchart TD')
+      .replace(/graph\s+RL\b/g, 'graph TD')
+      .replace(/flowchart\s+RL\b/g, 'flowchart TD');
+
+    // If no direction was specified for graph/flowchart, default to TD
+    if (/^(graph|flowchart)\s*$/m.test(processed) || /^(graph|flowchart)\s+[^LRTB]/m.test(processed)) {
+      processed = processed
+        .replace(/^(graph)(\s*)$/m, '$1 TD$2')
+        .replace(/^(flowchart)(\s*)$/m, '$1 TD$2')
+        .replace(/^(graph)(\s+)([^LRTB])/m, '$1 TD$2$3')
+        .replace(/^(flowchart)(\s+)([^LRTB])/m, '$1 TD$2$3');
+    }
+
+    return processed;
+  }
+
+  /**
    * Create custom marked renderer for mermaid support
    */
   function createMarkedRenderer() {
@@ -59,9 +83,13 @@
       if (lang === 'mermaid' && mermaid) {
         // Generate unique ID for the diagram
         var id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
+
+        // Process the mermaid code to switch from LR to TD if needed
+        var processedCode = processMermaidDirection(code);
+
         // Add wrapper div for toolbar positioning
         return '<div class="mermaid-wrapper" data-diagram-id="' + id + '">' +
-               '<div class="mermaid" id="' + id + '">' + escapeHtml(code) + '</div>' +
+               '<div class="mermaid" id="' + id + '">' + escapeHtml(processedCode) + '</div>' +
                '</div>';
       }
 

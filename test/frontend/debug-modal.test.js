@@ -49,7 +49,11 @@ describe('DebugModal', () => {
         warn: true,
         error: true,
         frontend: true
-      }
+      },
+      debugFilter: { client: 'All Clients' },
+      activeDebugTab: 'logs',
+      resourceFilter: { client: 'All Clients' },
+      resourceStats: {}
     };
 
     // Create chainable mock promises that call done callback immediately
@@ -594,6 +598,563 @@ describe('DebugModal', () => {
       });
 
       expect(() => DebugModal.refresh()).not.toThrow();
+    });
+  });
+
+  describe('multi-client support', () => {
+    describe('connected clients display', () => {
+      it('should render connected clients section', () => {
+        mockState.debugPanelOpen = true;
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'client-1',
+                  projectId: 'test-project',
+                  userAgent: 'Mozilla/5.0 Test',
+                  connectedAt: new Date().toISOString()
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const connectedClientsHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('Connected Clients')
+        );
+        expect(connectedClientsHtml).toBeTruthy();
+      });
+
+      it('should show current client with blue badge', () => {
+        mockState.debugPanelOpen = true;
+        window.sessionStorage.setItem('claudito-client-id', 'current-client');
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'current-client',
+                  projectId: 'test-project',
+                  userAgent: 'Mozilla/5.0 Test',
+                  connectedAt: new Date().toISOString()
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const clientHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('bg-blue-600') && call[0].includes('(You)')
+        );
+        expect(clientHtml).toBeTruthy();
+      });
+
+      it('should show other clients with purple badge', () => {
+        mockState.debugPanelOpen = true;
+        window.sessionStorage.setItem('claudito-client-id', 'current-client');
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'other-client',
+                  projectId: 'test-project',
+                  userAgent: 'Chrome/120.0',
+                  connectedAt: new Date().toISOString()
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const clientHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('bg-purple-600') && call[0].includes('other-client')
+        );
+        expect(clientHtml).toBeTruthy();
+      });
+
+      it('should format client timestamps correctly', () => {
+        mockState.debugPanelOpen = true;
+        const testTime = '2024-01-01T12:00:00.000Z';
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'test-client',
+                  projectId: 'test-project',
+                  userAgent: 'Test Browser',
+                  connectedAt: testTime
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const timestampHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('12:00:00 PM')
+        );
+        expect(timestampHtml).toBeTruthy();
+      });
+
+      it('should display resource stats summary', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'test-client',
+                  projectId: 'test-project',
+                  userAgent: 'Test Browser',
+                  connectedAt: new Date().toISOString(),
+                  lastResourceUpdate: new Date().toISOString(),
+                  resourceStats: {
+                    total: 10,
+                    loaded: 8,
+                    failed: 2,
+                    pending: 0
+                  }
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const resourceHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('10 total, 8 loaded, 2 failed')
+        );
+        expect(resourceHtml).toBeTruthy();
+      });
+
+      it('should handle empty clients list', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: []
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const noClientsHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('No clients connected')
+        );
+        expect(noClientsHtml).toBeTruthy();
+      });
+    });
+
+    describe('log filtering', () => {
+      beforeEach(() => {
+        // Reset jQuery mock for val()
+        global.$.mockImplementation(() => ({
+          val: jest.fn(() => 'All Clients'),
+          html: jest.fn(),
+          text: jest.fn(),
+          off: jest.fn(),
+          on: jest.fn(),
+          empty: jest.fn(),
+          find: jest.fn(() => ({
+            val: jest.fn(() => 'All Clients'),
+            off: jest.fn(),
+            on: jest.fn()
+          })),
+          toggleClass: jest.fn()
+        }));
+      });
+
+      it('should default to "All Clients" filter', () => {
+        mockState.debugPanelOpen = true;
+        mockState.debugFilter = { client: 'All Clients' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              recentLogs: [
+                {
+                  level: 'info',
+                  timestamp: new Date().toISOString(),
+                  message: 'Test log',
+                  clientId: 'client-1'
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        expect(mockState.debugFilter.client).toBe('All Clients');
+      });
+
+      it('should show client badges on log entries', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              recentLogs: [
+                {
+                  level: 'info',
+                  timestamp: new Date().toISOString(),
+                  message: 'Test log',
+                  clientId: 'client-123'
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const logHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('client-123') && call[0].includes('bg-gray-700')
+        );
+        expect(logHtml).toBeTruthy();
+      });
+
+      it('should filter logs by selected client', () => {
+        mockState.debugPanelOpen = true;
+        mockState.debugFilter = { client: 'client-1' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              recentLogs: [
+                {
+                  level: 'info',
+                  timestamp: new Date().toISOString(),
+                  message: 'Log from client 1',
+                  clientId: 'client-1'
+                },
+                {
+                  level: 'info',
+                  timestamp: new Date().toISOString(),
+                  message: 'Log from client 2',
+                  clientId: 'client-2'
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        const logsHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('Log from client 1')
+        );
+        const filteredOutLog = htmlCalls.find(call =>
+          call[0] && call[0].includes('Log from client 2')
+        );
+
+        expect(logsHtml).toBeTruthy();
+        expect(filteredOutLog).toBeFalsy();
+      });
+
+      it('should persist filter selection between renders', () => {
+        mockState.debugPanelOpen = true;
+        mockState.debugFilter.client = 'specific-client';
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({});
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+        expect(mockState.debugFilter.client).toBe('specific-client');
+
+        DebugModal.refresh();
+        expect(mockState.debugFilter.client).toBe('specific-client');
+      });
+
+      it('should handle logs without clientId', () => {
+        mockState.debugPanelOpen = true;
+        mockState.debugFilter = { client: 'All Clients' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              recentLogs: [
+                {
+                  level: 'info',
+                  timestamp: new Date().toISOString(),
+                  message: 'Log without client'
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
+    });
+
+    describe('resource filtering', () => {
+      it('should default to "All Clients" view', () => {
+        mockState.debugPanelOpen = true;
+        mockState.activeDebugTab = 'resources';
+        mockState.resourceFilter = { client: 'All Clients' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({});
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+        expect(mockState.resourceFilter.client).toBe('All Clients');
+      });
+
+      it('should aggregate stats from all clients', () => {
+        mockState.debugPanelOpen = true;
+        mockState.activeDebugTab = 'resources';
+        mockState.resourceFilter = { client: 'All Clients' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'client-1',
+                  resourceStats: { total: 5, loaded: 4, failed: 1 }
+                },
+                {
+                  clientId: 'client-2',
+                  resourceStats: { total: 3, loaded: 2, failed: 1 }
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        // Should show aggregated totals: 8 total, 6 loaded, 2 failed
+        const statsHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('8') && call[0].includes('6') && call[0].includes('2')
+        );
+        expect(statsHtml).toBeTruthy();
+      });
+
+      it('should filter by specific client', () => {
+        mockState.debugPanelOpen = true;
+        mockState.activeDebugTab = 'resources';
+        mockState.resourceFilter = { client: 'client-1' };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'client-1',
+                  resourceStats: { total: 5, loaded: 4, failed: 1 }
+                },
+                {
+                  clientId: 'client-2',
+                  resourceStats: { total: 3, loaded: 2, failed: 1 }
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        DebugModal.refresh();
+
+        const htmlCalls = global.$().html.mock.calls;
+        // Should only show client-1 stats
+        const statsHtml = htmlCalls.find(call =>
+          call[0] && call[0].includes('5') && call[0].includes('4') && call[0].includes('1')
+        );
+        expect(statsHtml).toBeTruthy();
+      });
+
+      it('should handle missing resource stats', () => {
+        mockState.debugPanelOpen = true;
+        mockState.activeDebugTab = 'resources';
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'client-1',
+                  projectId: 'test-project',
+                  userAgent: 'Test Browser',
+                  connectedAt: new Date().toISOString()
+                  // No resourceStats
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
+    });
+
+    describe('edge cases', () => {
+      it('should handle client without metadata', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'minimal-client'
+                  // No other fields
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
+
+      it('should handle malformed timestamps', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: [
+                {
+                  clientId: 'test-client',
+                  connectedAt: 'invalid-date',
+                  lastResourceUpdate: null
+                }
+              ]
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
+
+      it('should handle missing jQuery methods in tests', () => {
+        // Temporarily remove val method
+        const originalVal = global.$().val;
+        delete global.$().val;
+
+        mockState.debugPanelOpen = true;
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({});
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+
+        // Restore val method
+        global.$().val = originalVal;
+      });
+
+      it('should handle connectedClients being null', () => {
+        mockState.debugPanelOpen = true;
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: null
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
+
+      it('should handle resource events from unknown clients', () => {
+        mockState.debugPanelOpen = true;
+        mockState.activeDebugTab = 'resources';
+
+        // Simulate resource events without corresponding connected client
+        mockState.resourceStats = {
+          'unknown-client': {
+            total: 5,
+            loaded: 3,
+            failed: 2
+          }
+        };
+
+        mockApi.getDebugInfo.mockReturnValue({
+          done: jest.fn().mockImplementation(function(cb) {
+            cb({
+              connectedClients: []
+            });
+            return this;
+          }),
+          fail: jest.fn().mockReturnThis()
+        });
+
+        expect(() => DebugModal.refresh()).not.toThrow();
+      });
     });
   });
 });

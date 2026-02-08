@@ -1,3 +1,5 @@
+import { EventEmitter } from 'events';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LOG_LEVELS: Record<LogLevel, number> = {
@@ -94,13 +96,14 @@ class CircularBuffer<T> {
   }
 }
 
-class LogStore {
+class LogStore extends EventEmitter {
   private static instance: LogStore | null = null;
   private readonly projectBuffers: Map<string, CircularBuffer<LogEntry>> = new Map();
   private readonly globalBuffer: CircularBuffer<LogEntry>;
   private readonly bufferSize: number;
 
   constructor(bufferSize: number = DEFAULT_BUFFER_SIZE) {
+    super();
     this.bufferSize = bufferSize;
     this.globalBuffer = new CircularBuffer<LogEntry>(bufferSize * 2); // Global buffer is larger
   }
@@ -127,6 +130,11 @@ class LogStore {
       }
 
       buffer.push(entry);
+    }
+
+    // Emit event for frontend errors so WebSocket can broadcast them
+    if (entry.context && entry.context.type === 'frontend') {
+      this.emit('frontend_error', entry);
     }
   }
 
@@ -265,4 +273,8 @@ export function clearProjectLogs(projectId: string): void {
 
 export function clearGlobalLogs(): void {
   LogStore.getInstance().clearGlobalLogs();
+}
+
+export function getLogStore(): LogStore {
+  return LogStore.getInstance();
 }

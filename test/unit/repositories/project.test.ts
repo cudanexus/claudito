@@ -700,6 +700,7 @@ describe('FileProjectRepository', () => {
         lastContextUsage: null,
         permissionOverrides: null,
         modelOverride: null,
+        mcpOverrides: null,
       };
 
       // Set up old-style index (no path field)

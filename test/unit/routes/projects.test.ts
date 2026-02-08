@@ -29,6 +29,7 @@ jest.mock('fs', () => {
       writeFile: jest.fn(),
       access: jest.fn(),
       stat: jest.fn(),
+      mkdir: jest.fn().mockResolvedValue(undefined),
     },
     existsSync: jest.fn(),
     readFileSync: jest.fn(),
@@ -36,6 +37,24 @@ jest.mock('fs', () => {
     statSync: jest.fn(),
   };
 });
+
+// Mock rate limit middleware
+jest.mock('../../../src/middleware/rate-limit', () => ({
+  roadmapGenerationRateLimit: (_req: any, _res: any, next: any) => next(),
+  agentOperationRateLimit: (_req: any, _res: any, next: any) => next(),
+  moderateRateLimit: (_req: any, _res: any, next: any) => next(),
+  strictRateLimit: (_req: any, _res: any, next: any) => next(),
+}));
+
+// Mock getWebSocketServer and related functions
+let mockWebSocketServer: any = null;
+jest.mock('../../../src/routes', () => ({
+  ...jest.requireActual('../../../src/routes'),
+  getWebSocketServer: jest.fn(() => mockWebSocketServer),
+  getAgentManager: jest.fn(() => null),
+  getProcessTracker: jest.fn(() => null),
+  getRalphLoopService: jest.fn(() => null),
+}));
 
 import fs from 'fs';
 
@@ -45,6 +64,7 @@ describe('Projects Routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockWebSocketServer = null;
 
     deps = {
       projectRepository: createMockProjectRepository([{ ...sampleProject }]),
@@ -109,7 +129,7 @@ describe('Projects Routes', () => {
         .send({ name: 'New Project' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toContain('Path is required');
+      expect(response.body.error).toContain('path:');
     });
 
     it('should return 400 when project creation fails', async () => {
@@ -120,7 +140,7 @@ describe('Projects Routes', () => {
 
       const response = await request(app)
         .post('/api/projects')
-        .send({ path: '/invalid/path' });
+        .send({ name: 'Test', path: '/invalid/path' });
 
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('Folder not found');
@@ -219,7 +239,7 @@ describe('Projects Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toContain('Prompt is required');
+      expect(response.body.error).toContain('prompt:');
     });
 
     it('should return 404 when project not found', async () => {
@@ -322,7 +342,7 @@ describe('Projects Routes', () => {
         .send({ phaseId: 'phase-1' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toContain('phaseId, milestoneId, and taskIndex are required');
+      expect(response.body.error).toContain('milestoneId');
     });
 
     it('should return 404 when project not found', async () => {
@@ -794,9 +814,12 @@ describe('Projects Routes', () => {
     });
 
     it('should allow images without message', async () => {
+      deps.agentManager.isRunning = jest.fn().mockReturnValue(true);
+      deps.agentManager.getAgentMode = jest.fn().mockReturnValue('interactive');
+
       const response = await request(app)
         .post(`/api/projects/${sampleProject.id}/agent/send`)
-        .send({ images: [{ type: 'base64', data: 'abc123' }] });
+        .send({ images: ['data:image/png;base64,abc123'] });
 
       expect(response.status).toBe(200);
     });
@@ -1067,6 +1090,61 @@ describe('Projects Routes', () => {
       expect(response.body.lastCommand).toBeDefined();
     });
 
+    it('should include connected clients in debug info', async () => {
+      // Mock WebSocket server with connected clients
+      const mockConnectedClients = [
+        {
+          clientId: 'client-1',
+          projectId: sampleProject.id,
+          userAgent: 'Mozilla/5.0',
+          connectedAt: new Date().toISOString(),
+        },
+        {
+          clientId: 'client-2',
+          projectId: sampleProject.id,
+          userAgent: 'Chrome/120.0',
+          connectedAt: new Date().toISOString(),
+        },
+      ];
+
+      // Set up the mock WebSocket server
+      mockWebSocketServer = {
+        getConnectedClients: jest.fn(() => mockConnectedClients),
+      };
+
+      const response = await request(app)
+        .get(`/api/projects/${sampleProject.id}/debug`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.connectedClients).toBeDefined();
+      expect(response.body.connectedClients).toEqual(mockConnectedClients);
+    });
+
+    it('should handle missing websocket server gracefully', async () => {
+      // Set mockWebSocketServer to null
+      mockWebSocketServer = null;
+
+      const response = await request(app)
+        .get(`/api/projects/${sampleProject.id}/debug`);
+
+      expect(response.status).toBe(200);
+      // connectedClients should be undefined when no WebSocket server
+      expect(response.body.connectedClients).toBeUndefined();
+    });
+
+    it('should return empty array when no clients for project', async () => {
+      // Mock WebSocket server with no clients
+      mockWebSocketServer = {
+        getConnectedClients: jest.fn(() => []),
+      };
+
+      const response = await request(app)
+        .get(`/api/projects/${sampleProject.id}/debug`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.connectedClients).toEqual([]);
+    });
+
     it('should respect limit parameter', async () => {
       await request(app)
         .get(`/api/projects/${sampleProject.id}/debug?limit=10`);
@@ -1099,7 +1177,7 @@ describe('Projects Routes', () => {
         });
 
       expect(response.status).toBe(200);
-      expect(fs.writeFileSync).toHaveBeenCalled();
+      expect(fs.promises.writeFile).toHaveBeenCalled();
     });
 
     it('should return 400 when filePath missing', async () => {

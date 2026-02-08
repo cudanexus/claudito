@@ -1,6 +1,7 @@
 /**
- * State Module
- * Centralized application state management
+ * @module StateModule
+ * @description Centralized application state management for Claudito.
+ * Provides a single source of truth for all application state.
  */
 (function(root, factory) {
   'use strict';
@@ -15,7 +16,12 @@
 
   /**
    * Create the default application state
-   * @returns {Object} Default state object
+   * @function createDefaultState
+   * @memberof module:StateModule
+   * @returns {Claudito.ApplicationState} Default state object with all initial values
+   * @example
+   * const initialState = createDefaultState();
+   * console.log(initialState.permissionMode); // 'plan'
    */
   function createDefaultState() {
     return {
@@ -109,6 +115,14 @@
       // Tasks
       currentTodos: [],
 
+      // Multi-question tracking
+      multiQuestionState: {
+        activeToolId: null,
+        totalQuestions: 0,
+        answers: {},
+        isMultiQuestion: false
+      },
+
       // Search
       search: {
         isOpen: false,
@@ -122,7 +136,11 @@
           system: true
         },
         searchHistory: false,
-        historyResults: []
+        historyResults: [],
+        options: {
+          regex: false,
+          caseSensitive: false
+        }
       },
 
       // Debug
@@ -154,17 +172,28 @@
 
   /**
    * Create a state manager with change tracking
-   * @param {Object} initialState Optional initial state
-   * @returns {Object} State manager interface
+   * @function createStateManager
+   * @memberof module:StateModule
+   * @param {Claudito.ApplicationState} [initialState] - Optional initial state, defaults to createDefaultState()
+   * @returns {StateManager} State manager interface with get/set/update/subscribe methods
+   * @example
+   * const stateManager = createStateManager();
+   * stateManager.set('selectedProjectId', 'abc123');
+   * const projectId = stateManager.get('selectedProjectId');
    */
   function createStateManager(initialState) {
     var state = initialState || createDefaultState();
     var changeListeners = {};
 
     /**
-     * Get a value from state
-     * @param {string} path Dot-notation path (e.g., 'search.query')
-     * @returns {*} The value at the path
+     * Get a value from state by path
+     * @function get
+     * @memberof StateManager
+     * @param {string} [path] - Dot-notation path (e.g., 'search.query'). If omitted, returns entire state
+     * @returns {*} The value at the path or undefined if not found
+     * @example
+     * const query = stateManager.get('search.query');
+     * const entireState = stateManager.get();
      */
     function get(path) {
       if (!path) return state;
@@ -181,9 +210,15 @@
     }
 
     /**
-     * Set a value in state
-     * @param {string} path Dot-notation path
-     * @param {*} value Value to set
+     * Set a value in state and notify listeners
+     * @function set
+     * @memberof StateManager
+     * @param {string} path - Dot-notation path
+     * @param {*} value - Value to set
+     * @fires StateManager#change
+     * @example
+     * stateManager.set('currentConversationId', 'conv-123');
+     * stateManager.set('wsReconnect.attempts', 5);
      */
     function set(path, value) {
       var parts = path.split('.');
@@ -205,7 +240,16 @@
 
     /**
      * Update multiple values at once
-     * @param {Object} updates Object with path: value pairs
+     * @function update
+     * @memberof StateManager
+     * @param {Object.<string, *>} updates - Object with path: value pairs
+     * @fires StateManager#change
+     * @example
+     * stateManager.update({
+     *   'selectedProjectId': 'proj-123',
+     *   'activeTab': 'project-files',
+     *   'search.query': 'authentication'
+     * });
      */
     function update(updates) {
       for (var path in updates) {
@@ -217,6 +261,11 @@
 
     /**
      * Reset state to defaults
+     * @function reset
+     * @memberof StateManager
+     * @fires StateManager#change
+     * @example
+     * stateManager.reset(); // All values back to defaults
      */
     function reset() {
       state = createDefaultState();
@@ -225,8 +274,21 @@
 
     /**
      * Register a change listener for a path
-     * @param {string} path Path to watch (use '*' for all changes)
-     * @param {Function} listener Callback function
+     * @function onChange
+     * @memberof StateManager
+     * @param {string} path - Path to watch (use '*' for all changes)
+     * @param {StateChangeListener} listener - Callback function
+     * @returns {void}
+     * @example
+     * // Listen to specific path
+     * stateManager.onChange('selectedProjectId', (newId, oldId) => {
+     *   console.log(`Project changed from ${oldId} to ${newId}`);
+     * });
+     *
+     * // Listen to all changes
+     * stateManager.onChange('*', (newVal, oldVal, path) => {
+     *   console.log(`${path} changed`);
+     * });
      */
     function onChange(path, listener) {
       if (!changeListeners[path]) {
@@ -237,8 +299,16 @@
 
     /**
      * Remove a change listener
-     * @param {string} path Path the listener was registered for
-     * @param {Function} listener Callback to remove
+     * @function offChange
+     * @memberof StateManager
+     * @param {string} path - Path the listener was registered for
+     * @param {StateChangeListener} listener - Callback to remove
+     * @returns {void}
+     * @example
+     * const myListener = (newVal) => console.log(newVal);
+     * stateManager.onChange('activeTab', myListener);
+     * // Later...
+     * stateManager.offChange('activeTab', myListener);
      */
     function offChange(path, listener) {
       if (!changeListeners[path]) return;
@@ -252,9 +322,12 @@
 
     /**
      * Notify listeners of a change
-     * @param {string} path Changed path
-     * @param {*} newValue New value
-     * @param {*} oldValue Old value
+     * @function notifyListeners
+     * @memberof StateManager
+     * @private
+     * @param {string} path - Changed path
+     * @param {*} newValue - New value
+     * @param {*} oldValue - Old value
      */
     function notifyListeners(path, newValue, oldValue) {
       // Notify specific path listeners
@@ -299,12 +372,28 @@
 
     /**
      * Get the raw state object (for backward compatibility)
-     * @returns {Object} The state object
+     * @function getState
+     * @memberof StateManager
+     * @deprecated Use get() method instead for better encapsulation
+     * @returns {Claudito.ApplicationState} The entire state object
+     * @example
+     * const fullState = stateManager.getState();
+     * console.log(fullState.projects);
      */
     function getState() {
       return state;
     }
 
+    /**
+     * @typedef {Object} StateManager
+     * @property {Function} get - Get value by path
+     * @property {Function} set - Set value by path
+     * @property {Function} update - Update multiple values
+     * @property {Function} reset - Reset to defaults
+     * @property {Function} onChange - Subscribe to changes
+     * @property {Function} offChange - Unsubscribe from changes
+     * @property {Function} getState - Get raw state (deprecated)
+     */
     return {
       get: get,
       set: set,
@@ -315,6 +404,13 @@
       getState: getState
     };
   }
+
+  /**
+   * @typedef {Function} StateChangeListener
+   * @param {*} newValue - New value at the path
+   * @param {*} oldValue - Previous value at the path
+   * @param {string} path - The path that changed
+   */
 
   // Public API
   return {

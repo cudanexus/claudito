@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
 import { ChildProcess } from 'child_process';
-import * as path from 'path';
+import * as fs from 'fs';
 
 import { getLogger, Logger } from '../utils/logger';
 import { McpServerConfig } from '../repositories/settings';
-import { ProcessManager, ProcessSpawner, defaultSpawner } from './process-manager';
+import { ProcessManager, ProcessSpawner } from './process-manager';
 import { StreamHandler } from './stream-handler';
 import { MessageBuilder } from './message-builder';
 import {
@@ -14,6 +14,7 @@ import {
   WaitingStatus,
   ContextUsage,
   ProcessInfo,
+  PermissionRequest,
 } from './types';
 
 // Re-export types from types file that are part of the public API
@@ -31,6 +32,9 @@ export {
   ContextUsage,
   ProcessInfo,
 } from './types';
+
+// Export ProcessSpawner type for testing
+export { ProcessSpawner } from './process-manager';
 
 export interface ClaudeAgent {
   readonly projectId: string;
@@ -61,7 +65,11 @@ export interface ClaudeAgentEvents {
   exit: (code: number | null) => void;
   waitingForInput: (status: WaitingStatus) => void;
   sessionNotFound: (sessionId: string) => void;
+  exitPlanMode: (planContent: string) => void;
 }
+
+// Export alias for backward compatibility
+export type AgentEvents = ClaudeAgentEvents;
 
 export interface PermissionConfig {
   skipPermissions: boolean;
@@ -153,6 +161,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   private readonly _mcpServers: McpServerConfig[];
   private _sessionError: string | null = null;
   private _ralphLoopPhase: 'worker' | 'reviewer' | undefined;
+  private _mcpConfigPath: string | null = null;
 
   constructor(config: ClaudeAgentConfig) {
     this.projectId = config.projectId;
@@ -248,10 +257,33 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   }
 
   startWithOptions(options: ClaudeAgentStartOptions): void {
+    this.validateStart();
+    this.initializeForStart(options);
+
+    const { args, env } = this.prepareCommand(options);
+
+    try {
+      const process = this.spawnClaudeProcess(args, env);
+      this.handlePostStart(options, process);
+    } catch (error) {
+      this.setStatus('error');
+      throw error;
+    }
+  }
+
+  /**
+   * Validate that the agent can be started.
+   */
+  private validateStart(): void {
     if (this.processManager.isRunning()) {
       throw new Error('Agent is already running');
     }
+  }
 
+  /**
+   * Initialize agent state for starting.
+   */
+  private initializeForStart(options: ClaudeAgentStartOptions): void {
     this.logger.info('Starting Claude agent', {
       mode: this._mode,
       sessionId: options.sessionId,
@@ -263,42 +295,68 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this.reset();
     this._ralphLoopPhase = options.ralphLoopPhase;
 
+    // Emit system message about starting
+    this.emitMessage({
+      type: 'system',
+      content: `Starting Claude agent in ${this._mode} mode`,
+      timestamp: new Date().toISOString(),
+    });
+
     // Set session ID
     if (options.sessionId || options.resumeSessionId) {
       this._sessionId = options.sessionId || options.resumeSessionId || null;
     }
+  }
 
-    // Build command arguments
+  /**
+   * Prepare command arguments and environment.
+   */
+  private prepareCommand(options: ClaudeAgentStartOptions): { args: string[], env: Record<string, string> } {
     const args = this.buildCommandArgs(options);
     const env = this.buildEnvironment();
     this._lastCommand = `claude ${args.join(' ')}`;
 
-    try {
-      // Spawn the process
-      const process = this.processManager.spawn('claude', args, this.projectPath, env);
+    this.logger.info('Full command args', { args });
 
-      // Setup stream processing
-      this.setupStreamProcessing(process);
+    return { args, env };
+  }
 
-      this.setStatus('running');
+  /**
+   * Spawn the Claude process.
+   */
+  private spawnClaudeProcess(args: string[], env: Record<string, string>): ChildProcess {
+    const process = this.processManager.spawn('claude', args, this.projectPath, env);
+    this.setupStreamProcessing(process);
+    this.setStatus('running');
+    return process;
+  }
 
-      // Send initial message if in autonomous mode
-      if (this._mode === 'autonomous' && options.initialMessage) {
-        this.sendInputInternal(options.initialMessage);
+  /**
+   * Handle post-start tasks.
+   */
+  private handlePostStart(options: ClaudeAgentStartOptions, _process: ChildProcess): void {
+    // Send initial message via stdin (both modes use stream-json format)
+    if (options.initialMessage && options.initialMessage.trim()) {
+      this.logger.info('Sending initial message', {
+        contentLength: options.initialMessage.length,
+      });
+      this.sendInputInternal(options.initialMessage);
+
+      // In autonomous mode, close stdin after sending the initial message
+      if (this._mode === 'autonomous') {
+        this.processManager.closeStdin();
       }
+    } else {
+      this.logger.info('No initial message to send');
+    }
 
-      // If waiting for ready, emit ready message
-      if (options.waitForReady) {
-        this.emitMessage({
-          type: 'system',
-          content: 'Waiting for Claude to be ready...',
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-    } catch (error) {
-      this.setStatus('error');
-      throw error;
+    // If waiting for ready, emit ready message
+    if (options.waitForReady) {
+      this.emitMessage({
+        type: 'system',
+        content: 'Waiting for Claude to be ready...',
+        timestamp: new Date().toISOString(),
+      });
     }
   }
 
@@ -315,6 +373,13 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   }
 
   sendInput(input: string): void {
+    this.logger.info('sendInput called', {
+      inputLength: input.length,
+      isRunning: this.processManager.isRunning(),
+      isProcessing: this.isProcessing,
+      queueLength: this.inputQueue.length,
+    });
+
     if (!this.processManager.isRunning()) {
       throw new Error('Agent is not running');
     }
@@ -353,7 +418,7 @@ export class DefaultClaudeAgent implements ClaudeAgent {
 
   private setupHandlers(): void {
     // Forward stream handler events
-    this.streamHandler.on('message', (message) => {
+    this.streamHandler.on('message', (message: AgentMessage) => {
       // Apply ralph loop phase if set
       if (this._ralphLoopPhase && message.type === 'stdout') {
         message.ralphLoopPhase = this._ralphLoopPhase;
@@ -379,41 +444,67 @@ export class DefaultClaudeAgent implements ClaudeAgent {
       this.emitMessage(message);
     });
 
-    this.streamHandler.on('waitingForInput', (status) => {
+    this.streamHandler.on('waitingForInput', (status: WaitingStatus) => {
       this._waitingVersion = status.version;
       this.emitter.emit('waitingForInput', status);
     });
 
-    this.streamHandler.on('contextUsage', (usage) => {
+    this.streamHandler.on('contextUsage', (_usage: ContextUsage) => {
       // Set max context tokens
       const maxTokens = this._limits.contextTokens || DEFAULT_MAX_CONTEXT_TOKENS;
       this.streamHandler.setMaxContextTokens(maxTokens);
     });
 
-    this.streamHandler.on('error', (error) => {
+    this.streamHandler.on('error', (error: Error) => {
       this.logger.error('Stream handler error', { error: error.message });
       this.setStatus('error');
     });
 
-    this.streamHandler.on('sessionNotFound', (sessionId) => {
+    this.streamHandler.on('sessionNotFound', (sessionId: string) => {
       this._sessionError = `Session not found: ${sessionId}`;
       this.emitter.emit('sessionNotFound', sessionId);
     });
 
-    this.streamHandler.on('permissionRequest', (request) => {
+    this.streamHandler.on('permissionRequest', (request: PermissionRequest) => {
       // Handle permission request if needed
-      this.logger.debug('Permission request', request);
+      this.logger.debug('Permission request', { tool: request.tool, reason: request.reason });
+    });
+
+    this.streamHandler.on('exitPlanMode', (planContent: string) => {
+      this.logger.info('ExitPlanMode received', { planContentLength: planContent.length });
+      this.emitter.emit('exitPlanMode', planContent);
     });
 
     // Forward process manager events
     this.processManager.on('exit', (code) => {
       this.logger.info('Process exited', { code });
+
+      // Process any remaining buffer content before cleanup
+      if (this.lineBuffer.trim()) {
+        this.streamHandler.processLine(this.lineBuffer.trim());
+        this.lineBuffer = '';
+      }
+
+      // Emit system message about exit
+      this.emitMessage({
+        type: 'system',
+        content: `Claude agent exited with code ${code}`,
+        timestamp: new Date().toISOString(),
+      });
+
       this.emitter.emit('exit', code);
-      this.setStatus('stopped');
+
+      // Set status based on exit code
+      if (code !== null && code !== 0) {
+        this.setStatus('error');
+      } else {
+        this.setStatus('stopped');
+      }
+
       this.reset();
     });
 
-    this.processManager.on('error', (error) => {
+    this.processManager.on('error', (error: Error) => {
       this.logger.error('Process error', { error: error.message });
       this.setStatus('error');
     });
@@ -423,8 +514,17 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     const stdout = this.processManager.getStdout();
     const stderr = this.processManager.getStderr();
 
+    this.logger.info('Setting up stream processing', {
+      hasStdout: !!stdout,
+      hasStderr: !!stderr,
+    });
+
     if (stdout) {
       stdout.on('data', (data: Buffer) => {
+        this.logger.debug('STDOUT <<< Raw data', {
+          bytes: data.length,
+          preview: data.toString().substring(0, 200),
+        });
         this.processStreamData(data.toString());
       });
     }
@@ -432,7 +532,15 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     if (stderr) {
       stderr.on('data', (data: Buffer) => {
         const content = data.toString();
-        this.logger.debug('Process stderr', { content });
+        this.logger.warn('STDERR <<< Error output', {
+          bytes: data.length,
+          content: content.substring(0, 500),
+        });
+
+        // Check for session ID conflict
+        if (content.includes('already in use')) {
+          this._sessionError = content.trim();
+        }
 
         this.emitMessage({
           type: 'stderr',
@@ -441,6 +549,21 @@ export class DefaultClaudeAgent implements ClaudeAgent {
         });
       });
     }
+
+    // Log process events
+    process.on('error', (err) => {
+      this.logger.error('Process error event', { error: err.message });
+    });
+
+    process.on('exit', (code, signal) => {
+      this.logger.info('Process exit event', { code, signal });
+
+      // Process any remaining buffer content
+      if (this.lineBuffer.trim()) {
+        this.streamHandler.processLine(this.lineBuffer.trim());
+        this.lineBuffer = '';
+      }
+    });
   }
 
   private processStreamData(data: string): void {
@@ -477,16 +600,27 @@ export class DefaultClaudeAgent implements ClaudeAgent {
   }
 
   private sendInputInternal(input: string): void {
-    const fullInput = input.endsWith('\n') ? input : input + '\n';
-    const success = this.processManager.sendInput(fullInput);
+    // Both modes use stream-json format for stdin
+    const jsonMessage = JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: input,
+      },
+    });
+    const messageToSend = jsonMessage + '\n';
+
+    this.logger.info('STDIN >>> Sending message', {
+      contentLength: input.length,
+      contentPreview: input.substring(0, 100),
+    });
+
+    const success = this.processManager.sendInput(messageToSend);
+    this.logger.info('STDIN >>> Message sent', { success });
 
     if (success) {
-      // Emit user message
-      this.emitMessage({
-        type: 'user',
-        content: input.trim(),
-        timestamp: new Date().toISOString(),
-      });
+      // Note: Don't emit user message here - the UI already shows it when user sends
+      // Emitting it again would cause duplicate display
 
       // Update waiting status
       this._waitingVersion++;
@@ -501,6 +635,11 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     const message = options.initialMessage
       ? MessageBuilder.buildUserMessage(options.initialMessage, options.images)
       : undefined;
+
+    // Generate MCP config file if we have servers
+    if (this._mcpServers && this._mcpServers.length > 0) {
+      this._mcpConfigPath = MessageBuilder.generateMcpConfig(this._mcpServers, this.projectId);
+    }
 
     return MessageBuilder.buildArgs({
       mode: this._mode,
@@ -518,52 +657,21 @@ export class DefaultClaudeAgent implements ClaudeAgent {
       permissionMode: options.permissionMode || this._permissions.permissionMode,
       skipPermissions: this._permissions.skipPermissions,
       message,
+      mcpConfigPath: this._mcpConfigPath || undefined,
     });
   }
 
   private buildEnvironment(): Record<string, string> {
     const env: Record<string, string> = MessageBuilder.buildEnvironment();
 
-    // Add MCP server configurations
-    if (this._mcpServers.length > 0) {
-      const serverEnv = this.buildMcpEnvironment(this._mcpServers);
-      Object.assign(env, serverEnv);
-    }
-
-    return env;
-  }
-
-  private buildMcpEnvironment(servers: McpServerConfig[]): Record<string, string> {
-    const env: Record<string, string> = {};
-
-    servers.forEach((server, index) => {
-      const prefix = `CLAUDE_MCP_SERVER_${index}`;
-
-      env[`${prefix}_NAME`] = server.name;
-      if (server.command) {
-        env[`${prefix}_COMMAND`] = server.command;
-      }
-
-      if (server.args && server.args.length > 0) {
-        env[`${prefix}_ARGS`] = JSON.stringify(server.args);
-      }
-
-      // Note: workingDirectory not currently part of McpServerConfig
-      // Can be added in future if needed
-
-      if (server.env) {
-        env[`${prefix}_ENV`] = JSON.stringify(server.env);
-      }
-    });
-
-    env.CLAUDE_MCP_SERVER_COUNT = String(servers.length);
+    // MCP servers are now passed via CLI flags, not environment variables
 
     return env;
   }
 
   private getWaitingStatus(): WaitingStatus {
     return {
-      isWaiting: this.streamHandler.getContextUsage() !== null && this.isProcessing === false,
+      isWaiting: this.mode === 'interactive' && this._status === 'running' && !this.isProcessing,
       version: this._waitingVersion,
     };
   }
@@ -587,5 +695,19 @@ export class DefaultClaudeAgent implements ClaudeAgent {
     this._sessionError = null;
     this._ralphLoopPhase = undefined;
     this.streamHandler.reset();
+
+    // Clean up MCP config file if it exists
+    if (this._mcpConfigPath) {
+      try {
+        fs.unlinkSync(this._mcpConfigPath);
+        this.logger.debug('Deleted MCP config file', { path: this._mcpConfigPath });
+      } catch (error) {
+        this.logger.warn('Failed to delete MCP config file', {
+          path: this._mcpConfigPath,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      this._mcpConfigPath = null;
+    }
   }
 }

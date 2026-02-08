@@ -210,7 +210,9 @@ describe('FileBrowser', () => {
         name: 'file.js',
         content: 'file content',
         originalContent: 'file content',
-        modified: false
+        modified: false,
+        isMarkdown: false,
+        previewMode: false
       });
     });
 

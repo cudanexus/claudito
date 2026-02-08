@@ -3,6 +3,20 @@
   --claudito-font-size: 14px;
 }
 
+/* Spin animation for loading states */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
 /* Search highlight styles */
 .search-highlight {
   background-color: rgba(251, 191, 36, 0.4);
@@ -2437,6 +2451,131 @@ body {
   outline: none;
 }
 
+/* Tablet breakpoint - enhance usability for tablet screens */
+@media (min-width: 768px) and (max-width: 1024px) {
+  /* Adjust spacing for tablet screens */
+  .project-card {
+    padding: 1rem;
+  }
+
+  /* Larger touch targets for tablet */
+  button {
+    min-height: 44px;
+  }
+
+  /* Better modal sizing for tablets */
+  .modal-content > div {
+    max-width: 90%;
+    margin: 2rem auto;
+  }
+
+  /* Adjust font sizes for better readability */
+  :root {
+    --claudito-font-size: 15px;
+  }
+
+  /* Better spacing for conversation messages */
+  .conversation-message {
+    padding: 1rem;
+  }
+
+  /* Larger input area for touch */
+  #input-message {
+    min-height: 48px;
+    font-size: 1rem;
+  }
+
+  /* Better touch targets for file tabs */
+  .file-tab {
+    padding: 0.5rem 1rem;
+  }
+
+  /* More spacing in project overview cards */
+  .project-overview-card {
+    padding: 1.5rem;
+  }
+
+  /* Larger click areas for quick actions */
+  .quick-action {
+    padding: 0.5rem;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Better spacing for roadmap items */
+  .roadmap-task {
+    padding: 0.5rem 0;
+  }
+
+  /* Larger checkboxes for easier tapping */
+  input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* Settings modal tab scrolling */
+.settings-tab-container {
+  position: relative;
+}
+
+@media (max-width: 768px) {
+  /* Tab container wrapper */
+  .settings-tab-container {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+  }
+
+  .settings-tab-container::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .settings-tab-container::-webkit-scrollbar-track {
+    background: #374151;
+  }
+
+  .settings-tab-container::-webkit-scrollbar-thumb {
+    background: #6b7280;
+    border-radius: 2px;
+  }
+
+  /* Tabs should not wrap */
+  .settings-tab-container > .flex {
+    flex-wrap: nowrap;
+    min-width: max-content;
+  }
+
+  /* Individual tab styling */
+  .settings-tab {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* Scroll indicators */
+  .settings-tab-container::before,
+  .settings-tab-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .settings-tab-container::before {
+    left: 0;
+    background: linear-gradient(to right, #1f2937, transparent);
+  }
+
+  .settings-tab-container::after {
+    right: 0;
+    background: linear-gradient(to left, #1f2937, transparent);
+  }
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   #sidebar {
@@ -2912,5 +3051,28 @@ body {
 
   #file-browser-sidebar.sidebar-collapsed {
     margin-left: -256px;
+  }
+}
+
+/* Unsaved changes indicator in modal header */
+.modal-header.has-unsaved h3::after {
+  content: " *";
+  color: #fbbf24; /* amber-400 */
+  font-weight: normal;
+}
+
+/* Highlight save button when changes exist */
+.btn-save-settings.has-changes {
+  animation: pulse-amber 2s infinite;
+  border-color: #fbbf24;
+}
+
+@keyframes pulse-amber {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.5);
   }
 }

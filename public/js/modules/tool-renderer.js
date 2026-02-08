@@ -503,6 +503,11 @@
       senderPrefix = (msg.ralphLoopPhase === 'worker' ? 'Worker' : 'Reviewer') + ' - ';
     }
 
+    // Special handling for AskUserQuestion
+    if (toolName === 'AskUserQuestion' && toolInput.questions) {
+      return renderAskUserQuestion(msg, toolInfo, toolId);
+    }
+
     toolDataStore[toolId] = {
       name: toolName,
       input: toolInput,
@@ -522,6 +527,97 @@
 
     html += renderToolArgsPreview(toolName, toolInput);
     html += '</div>';
+
+    return html;
+  }
+
+  /**
+   * Render AskUserQuestion tool with interactive buttons
+   */
+  function renderAskUserQuestion(msg, toolInfo, toolId) {
+    var toolInput = toolInfo.input || {};
+    var questions = toolInput.questions || [];
+    var timestampHtml = formatTimestamp(msg.timestamp);
+    var status = toolInfo.status || 'waiting';
+
+    // Store tool data for later reference
+    toolDataStore[toolId] = {
+      name: 'AskUserQuestion',
+      input: toolInput,
+      status: status
+    };
+
+    var html = '<div class="conversation-message tool-use ask-user-question" data-tool-id="' + escapeHtml(toolId) + '" data-msg-type="ask-user-question">' +
+      '<div class="tool-header">' +
+        '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
+        '</svg>' +
+        '<span class="tool-name">Claude is asking a question</span>' +
+        '<span class="tool-status ' + status + '"></span>' +
+        timestampHtml +
+      '</div>';
+
+    // Render each question
+    questions.forEach(function(question, qIndex) {
+      html += '<div class="p-4 bg-gray-800 rounded-lg my-2">';
+
+      // Question header
+      if (question.header) {
+        html += '<div class="text-xs text-purple-400 font-medium mb-1">' + escapeHtml(question.header) + '</div>';
+      }
+
+      // Question text
+      html += '<div class="text-sm text-gray-100 mb-3">' + escapeHtml(question.question) + '</div>';
+
+      // Options as buttons
+      html += '<div class="flex flex-wrap gap-2" data-question-index="' + qIndex + '">';
+
+      if (question.options && question.options.length > 0) {
+        question.options.forEach(function(option, oIndex) {
+          var optionId = toolId + '-q' + qIndex + '-o' + oIndex;
+          html += '<button type="button" class="ask-user-option bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition-colors flex flex-col items-start" ' +
+                  'data-tool-id="' + escapeHtml(toolId) + '" ' +
+                  'data-question-index="' + qIndex + '" ' +
+                  'data-option-index="' + oIndex + '" ' +
+                  'data-option-label="' + escapeHtml(option.label) + '">';
+
+          html += '<span class="font-medium">' + escapeHtml(option.label) + '</span>';
+          if (option.description) {
+            html += '<span class="text-xs text-gray-400 mt-1">' + escapeHtml(option.description) + '</span>';
+          }
+
+          html += '</button>';
+        });
+
+        // Always add "Other" option
+        html += '<button type="button" class="ask-user-option ask-user-other bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition-colors" ' +
+                'data-tool-id="' + escapeHtml(toolId) + '" ' +
+                'data-question-index="' + qIndex + '" ' +
+                'data-option-index="-1" ' +
+                'data-option-label="Other">' +
+                '<span class="font-medium">Other</span>' +
+                '<span class="text-xs text-gray-400 mt-1">Provide custom answer</span>' +
+                '</button>';
+      }
+
+      html += '</div>'; // options container
+
+      // Multi-select indicator
+      if (question.multiSelect) {
+        html += '<div class="text-xs text-gray-500 mt-2">You can select multiple options</div>';
+      }
+
+      html += '</div>'; // question container
+    });
+
+    html += '</div>'; // message container
+
+    // Trigger UI blocking after rendering
+    setTimeout(function() {
+      if (typeof window !== 'undefined' && window.setPromptBlockingState) {
+        window.setPromptBlockingState('askUserQuestion');
+      }
+    }, 0);
 
     return html;
   }

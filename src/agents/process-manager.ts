@@ -169,7 +169,7 @@ export class ProcessManager extends EventEmitter {
   /**
    * Kill the process forcefully.
    */
-  async kill(): Promise<void> {
+  kill(): void {
     if (!this.process || !this.process.pid) {
       return;
     }
@@ -220,6 +220,25 @@ export class ProcessManager extends EventEmitter {
   }
 
   /**
+   * Close stdin stream.
+   */
+  closeStdin(): void {
+    if (!this.process || !this.process.stdin) {
+      this.logger.warn('Cannot close stdin - process not running or stdin not available');
+      return;
+    }
+
+    try {
+      this.process.stdin.end();
+      this.logger.info('Closed stdin');
+    } catch (error) {
+      this.logger.error('Error closing stdin', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
    * Get stdout stream from the process.
    */
   getStdout(): NodeJS.ReadableStream | null {
@@ -240,8 +259,8 @@ export class ProcessManager extends EventEmitter {
     this.process.on('error', this.handleError.bind(this));
 
     // Handle process termination signals
-    process.once('SIGINT', () => this.stop());
-    process.once('SIGTERM', () => this.stop());
+    process.once('SIGINT', () => { void this.stop(); });
+    process.once('SIGTERM', () => { void this.stop(); });
   }
 
   private removeProcessListeners(): void {
@@ -276,31 +295,19 @@ export class ProcessManager extends EventEmitter {
   }
 
   private async stopWindows(pid: number): Promise<void> {
-    // Try graceful shutdown first
-    try {
-      // Send CTRL+C to the process
-      execFile('taskkill', ['/PID', String(pid)], (error) => {
-        if (error && !error.message.includes('not found')) {
-          this.logger.debug('Failed to send SIGTERM to process', {
-            pid,
-            error: error.message,
-          });
-        }
-      });
-
-      // Wait for graceful shutdown
-      await this.waitForExit(5000);
-    } catch {
-      // Force kill if graceful shutdown failed
+    // On Windows, use /F (force) directly as graceful shutdown often doesn't work
+    // /T kills the entire process tree
+    return new Promise((resolve) => {
       execFile('taskkill', ['/PID', String(pid), '/F', '/T'], (error) => {
-        if (error) {
-          this.logger.debug('Failed to kill process tree', {
+        if (error && !error.message.includes('not found')) {
+          this.logger.debug('Failed to kill process', {
             pid,
             error: error.message,
           });
         }
+        resolve();
       });
-    }
+    });
   }
 
   private async stopUnix(pid: number): Promise<void> {
@@ -328,8 +335,6 @@ export class ProcessManager extends EventEmitter {
     if (!this.process) return;
 
     return new Promise((resolve, reject) => {
-      let timeoutId: NodeJS.Timeout;
-
       const exitHandler = (): void => {
         clearTimeout(timeoutId);
         resolve();
@@ -337,7 +342,7 @@ export class ProcessManager extends EventEmitter {
 
       this.process!.once('exit', exitHandler);
 
-      timeoutId = setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         this.process!.removeListener('exit', exitHandler);
         reject(new Error('Process exit timeout'));
       }, timeout);
@@ -369,10 +374,11 @@ export class ProcessManager extends EventEmitter {
   static async killProcess(pid: number, signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
     if (isWindows) {
       return new Promise((resolve) => {
-        const killCmd = signal === 'SIGKILL' ? '/F' : '';
-        execFile('taskkill', ['/PID', String(pid), killCmd, '/T'], (error) => {
+        // Always use /F on Windows as graceful shutdown often doesn't work
+        const args = ['/PID', String(pid), '/F', '/T'];
+        execFile('taskkill', args, (error) => {
           if (error && !error.message.includes('not found')) {
-            throw error;
+            // Don't throw, just resolve - process may already be dead
           }
           resolve();
         });

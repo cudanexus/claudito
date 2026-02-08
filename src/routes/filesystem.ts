@@ -397,7 +397,8 @@ export function createFilesystemRouter(service: FilesystemService): Router {
     handleCreateDirectory(service, dirPath, res);
   });
 
-  router.put('/move', async (req: Request, res: Response) => {
+  router.put('/move', (req: Request, res: Response): void => {
+    void (async (): Promise<void> => {
     const { sourcePath, targetPath } = req.body as { sourcePath?: string; targetPath?: string };
 
     if (!sourcePath || !targetPath) {
@@ -429,18 +430,20 @@ export function createFilesystemRouter(service: FilesystemService): Router {
       await fsPromises.rename(sourcePath, targetPath);
 
       res.json({ success: true });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Move error:', error);
-      if (error.code === 'ENOENT') {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
         res.status(404).json({ error: 'Source file or directory not found' });
-      } else if (error.code === 'EEXIST') {
+      } else if (err.code === 'EEXIST') {
         res.status(409).json({ error: 'Target already exists' });
-      } else if (error.code === 'EXDEV') {
+      } else if (err.code === 'EXDEV') {
         res.status(400).json({ error: 'Cannot move across different drives' });
       } else {
-        res.status(500).json({ error: error.message || 'Failed to move file or directory' });
+        res.status(500).json({ error: err.message || 'Failed to move file or directory' });
       }
     }
+    })();
   });
 
   return router;

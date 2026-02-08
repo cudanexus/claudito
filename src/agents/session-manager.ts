@@ -1,9 +1,7 @@
-import { v4 as uuidv4 } from 'uuid';
 import { getLogger, Logger, isValidUUID } from '../utils';
 import {
   ProjectRepository,
   ConversationRepository,
-  Conversation,
 } from '../repositories';
 import { ContextUsage } from './claude-agent';
 
@@ -29,7 +27,7 @@ export interface SessionManagerEvents {
  */
 export class SessionManager {
   private readonly logger: Logger;
-  private readonly listeners: Map<keyof SessionManagerEvents, Set<Function>> = new Map();
+  private readonly listeners: Map<keyof SessionManagerEvents, Set<(...args: unknown[]) => void>> = new Map();
 
   constructor(
     private readonly projectRepository: ProjectRepository,
@@ -133,7 +131,24 @@ export class SessionManager {
     // If a specific session ID is requested
     if (requestedSessionId) {
       if (!isValidUUID(requestedSessionId)) {
-        throw new Error(`Invalid session ID format: ${requestedSessionId}`);
+        this.logger.warn('Invalid session ID format, recovering', {
+          projectId,
+          requestedSessionId,
+        });
+
+        // Delete the invalid conversation since it was explicitly requested
+        try {
+          await this.conversationRepository.deleteConversation(projectId, requestedSessionId);
+        } catch (error) {
+          this.logger.error('Failed to delete invalid conversation', {
+            projectId,
+            conversationId: requestedSessionId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+
+        // Treat invalid UUID as session recovery case
+        return await this.recoverSession(projectId, requestedSessionId);
       }
 
       // Check if the conversation exists
@@ -242,7 +257,7 @@ export class SessionManager {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener);
+    this.listeners.get(event)!.add(listener as (...args: unknown[]) => void);
   }
 
   /**
@@ -251,7 +266,7 @@ export class SessionManager {
   off<K extends keyof SessionManagerEvents>(event: K, listener: SessionManagerEvents[K]): void {
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
-      eventListeners.delete(listener);
+      eventListeners.delete(listener as (...args: unknown[]) => void);
     }
   }
 
@@ -263,7 +278,7 @@ export class SessionManager {
     if (listeners) {
       listeners.forEach((listener) => {
         try {
-          (listener as Function)(...args);
+          (listener)(...args);
         } catch (error) {
           this.logger.error(`Error in ${event} listener`, { error });
         }

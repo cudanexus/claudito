@@ -24,7 +24,13 @@ jest.mock('../../../src/utils', () => {
     getPidTracker: jest.fn().mockReturnValue({
       addProcess: jest.fn(),
       removeProcess: jest.fn(),
-      cleanupOrphanProcesses: jest.fn().mockResolvedValue({ killed: [], failed: [] }),
+      cleanupOrphanProcesses: jest.fn().mockResolvedValue({
+        foundCount: 0,
+        killedCount: 0,
+        killedPids: [],
+        failedPids: [],
+        skippedPids: [],
+      }),
       getTrackedProcesses: jest.fn().mockReturnValue([]),
     }),
   };
@@ -590,9 +596,12 @@ describe('DefaultAgentManager', () => {
     it('should call pid tracker cleanup', async () => {
       const result = await agentManager.cleanupOrphanProcesses();
 
-      // The mock returns killed and failed arrays
-      expect(result).toHaveProperty('killed');
-      expect(result).toHaveProperty('failed');
+      // The mock returns OrphanCleanupResult
+      expect(result).toHaveProperty('foundCount');
+      expect(result).toHaveProperty('killedCount');
+      expect(result).toHaveProperty('killedPids');
+      expect(result).toHaveProperty('failedPids');
+      expect(result).toHaveProperty('skippedPids');
     });
   });
 
@@ -736,12 +745,17 @@ describe('DefaultAgentManager', () => {
 
       await agentManager.startInteractiveAgent('test-project');
 
-      // Should delete old conversation with invalid ID
-      expect(mockConversationRepo.deleteConversation).toHaveBeenCalledWith('test-project', invalidUUID);
+      // Should NOT delete old conversation with invalid ID (recoverSession doesn't delete)
+      expect(mockConversationRepo.deleteConversation).not.toHaveBeenCalled();
       // Should create new conversation
       expect(mockConversationRepo.create).toHaveBeenCalled();
       // Should emit session recovery event
-      expect(listener).toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith(
+        'test-project',
+        invalidUUID,
+        expect.any(String),
+        'Session not found'
+      );
     });
 
     it('should create new conversation when provided session ID is not a valid UUID', async () => {
@@ -775,6 +789,16 @@ describe('DefaultAgentManager', () => {
       mockProjectRepo.findById.mockResolvedValue({
         ...testProject,
         currentConversationId: validUUID,
+      });
+
+      // Mock that the conversation exists
+      mockConversationRepo.findById.mockResolvedValueOnce({
+        id: validUUID,
+        projectId: 'test-project',
+        itemRef: null,
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
 
       await agentManager.startInteractiveAgent('test-project');
@@ -1091,6 +1115,71 @@ describe('DefaultAgentManager', () => {
       Object.defineProperty(mockAgent, 'queuedMessageCount', { value: 5 });
 
       expect(agentManager.getQueuedMessageCount('test-project')).toBe(5);
+    });
+  });
+
+  describe('MCP server configuration', () => {
+    it('should filter out disabled MCP servers when creating agent', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: true,
+          servers: [
+            { id: '1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+            { id: '2', name: 'Server 2', enabled: false, type: 'stdio' as const, command: 'cmd2' },
+            { id: '3', name: 'Server 3', enabled: true, type: 'http' as const, url: 'http://test' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [
+            { id: '1', name: 'Server 1', enabled: true, type: 'stdio', command: 'cmd1' },
+            { id: '3', name: 'Server 3', enabled: true, type: 'http', url: 'http://test' },
+          ],
+        })
+      );
+    });
+
+    it('should pass empty array when MCP is globally disabled', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        mcp: {
+          enabled: false,
+          servers: [
+            { id: '1', name: 'Server 1', enabled: true, type: 'stdio' as const, command: 'cmd1' },
+          ],
+        },
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [],
+        })
+      );
+    });
+
+    it('should handle missing MCP configuration gracefully', async () => {
+      const mockSettings = {
+        ...mockSettingsRepo.get(),
+        // No mcp property
+      };
+      mockSettingsRepo.get.mockResolvedValue(mockSettings);
+
+      await agentManager.startInteractiveAgent('test-project');
+
+      expect(mockAgentFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: [],
+        })
+      );
     });
   });
 });

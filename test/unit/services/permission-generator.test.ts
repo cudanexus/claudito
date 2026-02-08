@@ -1,5 +1,5 @@
 import { DefaultPermissionGenerator } from '../../../src/services/permission-generator';
-import { ClaudePermissions } from '../../../src/repositories/settings';
+import { ClaudePermissions, McpServerConfig } from '../../../src/repositories/settings';
 import { ProjectPermissionOverrides } from '../../../src/repositories/project';
 
 describe('DefaultPermissionGenerator', () => {
@@ -285,6 +285,71 @@ describe('DefaultPermissionGenerator', () => {
       const modeIndex = args.indexOf('--permission-mode');
       expect(args[modeIndex + 1]).toBe('plan');
       expect(args).toContain('--allowedTools');
+    });
+  });
+
+  describe('generateMcpAllowRules', () => {
+    it('should generate wildcard rules for enabled servers with autoApproveTools', () => {
+      const servers: McpServerConfig[] = [
+        { id: '1', name: 'filesystem', enabled: true, type: 'stdio', command: 'fs', autoApproveTools: true },
+        { id: '2', name: 'github', enabled: true, type: 'http', url: 'http://test', autoApproveTools: true },
+      ];
+
+      const rules = generator.generateMcpAllowRules(servers);
+
+      expect(rules).toContain('mcp__filesystem__*');
+      expect(rules).toContain('mcp__github__*');
+    });
+
+    it('should skip disabled servers', () => {
+      const servers: McpServerConfig[] = [
+        { id: '1', name: 'filesystem', enabled: false, type: 'stdio', command: 'fs', autoApproveTools: true },
+        { id: '2', name: 'github', enabled: true, type: 'http', url: 'http://test', autoApproveTools: true },
+      ];
+
+      const rules = generator.generateMcpAllowRules(servers);
+
+      expect(rules).not.toContain('mcp__filesystem__*');
+      expect(rules).toContain('mcp__github__*');
+    });
+
+    it('should skip servers with autoApproveTools false', () => {
+      const servers: McpServerConfig[] = [
+        { id: '1', name: 'filesystem', enabled: true, type: 'stdio', command: 'fs', autoApproveTools: false },
+        { id: '2', name: 'github', enabled: true, type: 'http', url: 'http://test', autoApproveTools: true },
+      ];
+
+      const rules = generator.generateMcpAllowRules(servers);
+
+      expect(rules).not.toContain('mcp__filesystem__*');
+      expect(rules).toContain('mcp__github__*');
+    });
+
+    it('should treat undefined autoApproveTools as true', () => {
+      const servers: McpServerConfig[] = [
+        { id: '1', name: 'filesystem', enabled: true, type: 'stdio', command: 'fs' },
+      ];
+
+      const rules = generator.generateMcpAllowRules(servers);
+
+      expect(rules).toContain('mcp__filesystem__*');
+    });
+
+    it('should handle empty server list', () => {
+      const rules = generator.generateMcpAllowRules([]);
+      expect(rules).toEqual([]);
+    });
+
+    it('should be included in generateArgs when mcpServers provided', () => {
+      const permissions = createPermissions({ allowRules: ['Read'] });
+      const servers: McpServerConfig[] = [
+        { id: '1', name: 'filesystem', enabled: true, type: 'stdio', command: 'fs' },
+      ];
+
+      const result = generator.generateArgs(permissions, null, servers);
+
+      expect(result.allowedTools).toContain('Read');
+      expect(result.allowedTools).toContain('mcp__filesystem__*');
     });
   });
 });

@@ -7,9 +7,11 @@
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
-  <script src="/vendor/tailwind.js"></script>
-  <script src="/vendor/jquery.min.js"></script>
-  <link rel="stylesheet" href="/css/styles.css">
+  <!-- TV Browser Compatibility - Load First -->
+  <script src="/js/tv-compat.js"></script>
+  <script src="/vendor/tailwind.js" onerror="window.resourceLoadError && window.resourceLoadError(this)"></script>
+  <script src="/vendor/jquery.min.js" onerror="window.resourceLoadError && window.resourceLoadError(this)"></script>
+  <link rel="stylesheet" href="/css/styles.css" onerror="window.resourceLoadError && window.resourceLoadError(this)">
   <style>
     .login-container {
       animation: fadeIn 0.3s ease-in-out;
@@ -22,8 +24,20 @@
       box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.3);
     }
   </style>
+  <!-- Inline critical styles for basic layout if CSS fails -->
+  <style>
+    body { margin: 0; padding: 0; background: #111827; color: #e5e7eb; font-family: -apple-system, system-ui, sans-serif; }
+    .error-fallback { padding: 2rem; text-align: center; }
+    .error-fallback h1 { color: #ef4444; margin-bottom: 1rem; }
+    .noscript-warning { background: #dc2626; color: white; padding: 1rem; text-align: center; }
+  </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center p-4">
+  <noscript>
+    <div class="noscript-warning">
+      JavaScript is required to run Claudito. Please enable JavaScript in your browser settings.
+    </div>
+  </noscript>
   <div class="login-container bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md border border-gray-700">
     <!-- Logo -->
     <div class="text-center mb-8">

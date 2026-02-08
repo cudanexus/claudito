@@ -60,6 +60,7 @@ export interface AgentMessage {
   type: 'stdout' | 'stderr' | 'system' | 'tool_use' | 'tool_result' | 'user' | 'question' | 'permission' | 'plan_mode' | 'compaction' | 'result' | 'status_change';
   content: string;
   timestamp: string;
+  hidden?: boolean; // If true, message should not be displayed in UI
   toolInfo?: ToolUseInfo;
   questionInfo?: QuestionInfo;
   permissionInfo?: PermissionRequest;

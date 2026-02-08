@@ -1,6 +1,7 @@
 /**
- * ApiClient module for Claudito
- * HTTP API wrapper for all backend endpoints
+ * @module ApiClient
+ * @description HTTP API wrapper for all backend endpoints
+ * @requires jquery
  */
 
 (function(root, factory) {
@@ -39,22 +40,60 @@
   // Health & System
   // ============================================================
 
+  /**
+   * Get health status of the server
+   * @function getHealth
+   * @memberof module:ApiClient
+   * @returns {JQueryXHR<Claudito.API.HealthResponse>} Health check response
+   * @example
+   * const health = await ApiClient.getHealth();
+   * console.log(health.status); // 'ok' or 'degraded'
+   */
   ApiClient.getHealth = function() {
     return $.get(baseUrl + '/api/health');
   };
 
+  /**
+   * Get development mode status
+   * @function getDevStatus
+   * @memberof module:ApiClient
+   * @returns {Promise<{devMode: boolean}>} Development mode status
+   */
   ApiClient.getDevStatus = function() {
     return $.get(baseUrl + '/api/dev');
   };
 
+  /**
+   * Shutdown the server (dev mode only)
+   * @function shutdownServer
+   * @memberof module:ApiClient
+   * @returns {Promise<void>} Resolves when shutdown initiated
+   * @throws {Error} If not in development mode
+   */
   ApiClient.shutdownServer = function() {
     return $.post(baseUrl + '/api/dev/shutdown');
   };
 
+  /**
+   * Get agent resource status across all projects
+   * @function getAgentResourceStatus
+   * @memberof module:ApiClient
+   * @returns {Promise<Claudito.API.ResourceStatus>} Resource usage information
+   * @example
+   * const status = await ApiClient.getAgentResourceStatus();
+   * console.log(`Running: ${status.runningCount}/${status.maxConcurrent}`);
+   */
   ApiClient.getAgentResourceStatus = function() {
     return $.get(baseUrl + '/api/agents/status');
   };
 
+  /**
+   * Get global server logs
+   * @function getGlobalLogs
+   * @memberof module:ApiClient
+   * @param {number} [limit=100] - Maximum number of log entries to retrieve
+   * @returns {Promise<Array<{timestamp: string, level: string, message: string, context?: Object}>>} Log entries
+   */
   ApiClient.getGlobalLogs = function(limit) {
     var url = baseUrl + '/api/logs';
 
@@ -69,18 +108,76 @@
   // Projects
   // ============================================================
 
+  /**
+   * Get all projects
+   * @function getProjects
+   * @memberof module:ApiClient
+   * @returns {Promise<Array<Claudito.API.Project>>} Array of projects
+   * @example
+   * const projects = await ApiClient.getProjects();
+   * projects.forEach(p => console.log(p.name, p.path));
+   */
   ApiClient.getProjects = function() {
     return $.get(baseUrl + '/api/projects');
   };
 
+  /**
+   * Add a new project
+   * @function addProject
+   * @memberof module:ApiClient
+   * @param {Object} data - Project data
+   * @param {string} data.name - Project name
+   * @param {string} data.path - Absolute path to project directory
+   * @returns {Promise<Claudito.API.Project>} Created project
+   * @throws {Error} If project already exists at path
+   * @throws {Error} If path is invalid or not accessible
+   * @example
+   * const project = await ApiClient.addProject({
+   *   name: 'My Project',
+   *   path: '/home/user/projects/myproject'
+   * });
+   */
   ApiClient.addProject = function(data) {
     return $.post(baseUrl + '/api/projects', data);
   };
 
+  /**
+   * Delete a project
+   * @function deleteProject
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<void>} Resolves when project is deleted
+   * @throws {Error} If project not found
+   * @throws {Error} If agent is running for this project
+   */
   ApiClient.deleteProject = function(id) {
     return $.ajax({ url: baseUrl + '/api/projects/' + id, method: 'DELETE' });
   };
 
+  /**
+   * Discover and register projects in a directory
+   * @function discoverProjects
+   * @memberof module:ApiClient
+   * @param {Object} data - Discovery parameters
+   * @param {string} data.searchPath - Directory path to search for projects
+   * @returns {Promise<{discovered: number, registered: number, alreadyRegistered: number, failed: number, projects: Array}>} Discovery results
+   */
+  ApiClient.discoverProjects = function(data) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/discover',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify(data)
+    });
+  };
+
+  /**
+   * Get debug information for a project
+   * @function getDebugInfo
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<{agent: Object, logs: Array, processes: Array, ralphLoop: Object}>} Debug information
+   */
   ApiClient.getDebugInfo = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/debug');
   };
@@ -89,14 +186,45 @@
   // Roadmap
   // ============================================================
 
+  /**
+   * Get project roadmap content and parsed structure
+   * @function getProjectRoadmap
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<{content: string, parsed: Claudito.API.Roadmap}>} Roadmap data
+   * @throws {Error} If project not found or roadmap doesn't exist
+   */
   ApiClient.getProjectRoadmap = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/roadmap');
   };
 
+  /**
+   * Generate a new roadmap via Claude
+   * @function generateRoadmap
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} prompt - Instructions for roadmap generation
+   * @returns {Promise<void>} Streams output via WebSocket
+   * @throws {Error} If agent is already running
+   * @example
+   * await ApiClient.generateRoadmap(projectId, 'Create a roadmap for a React todo app');
+   * // Listen for 'roadmap_message' WebSocket events for real-time output
+   */
   ApiClient.generateRoadmap = function(id, prompt) {
     return $.post(baseUrl + '/api/projects/' + id + '/roadmap/generate', { prompt: prompt });
   };
 
+  /**
+   * Modify existing roadmap via Claude prompt
+   * @function modifyRoadmap
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} prompt - Instructions for modifying the roadmap
+   * @returns {Promise<void>} Streams output via WebSocket
+   * @throws {Error} If roadmap doesn't exist
+   * @example
+   * await ApiClient.modifyRoadmap(projectId, 'Add a phase for performance optimization');
+   */
   ApiClient.modifyRoadmap = function(id, prompt) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + id + '/roadmap',
@@ -106,6 +234,14 @@
     });
   };
 
+  /**
+   * Send response to Claude when it asks a question during roadmap operations
+   * @function sendRoadmapResponse
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} response - User's response to Claude's question
+   * @returns {Promise<void>} Resolves when response is sent
+   */
   ApiClient.sendRoadmapResponse = function(id, response) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + id + '/roadmap/respond',
@@ -115,6 +251,17 @@
     });
   };
 
+  /**
+   * Delete a specific task from the roadmap
+   * @function deleteRoadmapTask
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} phaseId - Phase identifier
+   * @param {string} milestoneId - Milestone identifier
+   * @param {number} taskIndex - Task index within the milestone
+   * @returns {Promise<void>} Resolves when task is deleted
+   * @throws {Error} If task not found
+   */
   ApiClient.deleteRoadmapTask = function(id, phaseId, milestoneId, taskIndex) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + id + '/roadmap/task',
@@ -124,6 +271,16 @@
     });
   };
 
+  /**
+   * Delete an entire milestone from the roadmap
+   * @function deleteRoadmapMilestone
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} phaseId - Phase identifier
+   * @param {string} milestoneId - Milestone identifier
+   * @returns {Promise<void>} Resolves when milestone is deleted
+   * @throws {Error} If milestone not found
+   */
   ApiClient.deleteRoadmapMilestone = function(id, phaseId, milestoneId) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + id + '/roadmap/milestone',
@@ -133,6 +290,15 @@
     });
   };
 
+  /**
+   * Delete an entire phase from the roadmap
+   * @function deleteRoadmapPhase
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} phaseId - Phase identifier
+   * @returns {Promise<void>} Resolves when phase is deleted
+   * @throws {Error} If phase not found
+   */
   ApiClient.deleteRoadmapPhase = function(id, phaseId) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + id + '/roadmap/phase',
@@ -146,27 +312,92 @@
   // Agent
   // ============================================================
 
+  /**
+   * Start an autonomous agent for a project
+   * @function startAgent
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<void>} Resolves when agent starts
+   * @throws {Error} If agent is already running
+   * @deprecated Use startInteractiveAgent instead
+   */
   ApiClient.startAgent = function(id) {
     return $.post(baseUrl + '/api/projects/' + id + '/agent/start');
   };
 
+  /**
+   * Stop the running agent for a project
+   * @function stopAgent
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<void>} Resolves when agent stops
+   */
   ApiClient.stopAgent = function(id) {
     return $.post(baseUrl + '/api/projects/' + id + '/agent/stop');
   };
 
+  /**
+   * Get current agent status for a project
+   * @function getAgentStatus
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<Claudito.API.AgentStatus>} Agent status information
+   * @example
+   * const status = await ApiClient.getAgentStatus(projectId);
+   * if (status.running && status.waitingForResponse) {
+   *   console.log('Agent is waiting for input');
+   * }
+   */
   ApiClient.getAgentStatus = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/agent/status');
   };
 
+  /**
+   * Get autonomous loop status
+   * @function getLoopStatus
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<{active: boolean, currentMilestone?: string}>} Loop status
+   */
   ApiClient.getLoopStatus = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/agent/loop');
   };
 
-
+  /**
+   * Get Claude context usage for the current session
+   * @function getContextUsage
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<Claudito.API.ContextUsage>} Token usage and limits
+   * @example
+   * const usage = await ApiClient.getContextUsage(projectId);
+   * console.log(`Using ${usage.percentage}% of context window`);
+   */
   ApiClient.getContextUsage = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/agent/context');
   };
 
+  /**
+   * Start an interactive agent session
+   * @function startInteractiveAgent
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} [message=''] - Initial message to send
+   * @param {Array<{dataUrl: string, mimeType: string}>} [images] - Images to include
+   * @param {string} [sessionId] - Session ID for resumption
+   * @param {('acceptEdits'|'plan')} [permissionMode] - Permission mode
+   * @returns {Promise<{sessionId: string}>} Session information
+   * @throws {Error} If agent is already running
+   * @example
+   * // Start new session with message
+   * const session = await ApiClient.startInteractiveAgent(
+   *   projectId,
+   *   'Help me implement user authentication',
+   *   [], // no images
+   *   null, // new session
+   *   'plan' // plan mode
+   * );
+   */
   ApiClient.startInteractiveAgent = function(id, message, images, sessionId, permissionMode) {
     var payload = { message: message || '' };
 
@@ -195,6 +426,24 @@
     });
   };
 
+  /**
+   * Send a message to the running agent
+   * @function sendAgentMessage
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {string} message - Message text
+   * @param {Array<{dataUrl: string, mimeType: string}>} [images] - Images to include
+   * @returns {Promise<void>} Resolves when message is sent
+   * @throws {Error} If no agent is running
+   * @example
+   * // Send text message
+   * await ApiClient.sendAgentMessage(projectId, 'Fix the failing tests');
+   *
+   * // Send with images
+   * await ApiClient.sendAgentMessage(projectId, 'What is this error?', [
+   *   { dataUrl: 'data:image/png;base64,...', mimeType: 'image/png' }
+   * ]);
+   */
   ApiClient.sendAgentMessage = function(id, message, images) {
     var payload = { message: message };
 
@@ -219,14 +468,37 @@
   // Queue
   // ============================================================
 
+  /**
+   * Get queued messages waiting to be sent to agent
+   * @function getQueuedMessages
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<Array<string>>} Array of queued message texts
+   */
   ApiClient.getQueuedMessages = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/agent/queue');
   };
 
+  /**
+   * Remove project from agent startup queue
+   * @function removeFromQueue
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<void>} Resolves when project is removed from queue
+   */
   ApiClient.removeFromQueue = function(id) {
     return $.ajax({ url: baseUrl + '/api/projects/' + id + '/agent/queue', method: 'DELETE' });
   };
 
+  /**
+   * Remove a specific queued message by index
+   * @function removeQueuedMessage
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @param {number} index - Zero-based index of message to remove
+   * @returns {Promise<void>} Resolves when message is removed
+   * @throws {Error} If index is out of bounds
+   */
   ApiClient.removeQueuedMessage = function(id, index) {
     return $.ajax({ url: baseUrl + '/api/projects/' + id + '/agent/queue/' + index, method: 'DELETE' });
   };
@@ -235,18 +507,65 @@
   // Conversations
   // ============================================================
 
+  /**
+   * Get list of conversations for a project
+   * @function getConversations
+   * @memberof module:ApiClient
+   * @param {string} id - Project UUID
+   * @returns {Promise<Array<{id: string, label?: string, messageCount: number, lastMessageAt: string}>>} Conversation summaries
+   * @example
+   * const conversations = await ApiClient.getConversations(projectId);
+   * conversations.forEach(conv => {
+   *   console.log(`${conv.label || conv.id}: ${conv.messageCount} messages`);
+   * });
+   */
   ApiClient.getConversations = function(id) {
     return $.get(baseUrl + '/api/projects/' + id + '/conversations');
   };
 
+  /**
+   * Get full conversation with messages
+   * @function getConversation
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} conversationId - Conversation UUID
+   * @returns {Promise<Claudito.API.Conversation>} Conversation with all messages
+   * @throws {Error} If conversation not found
+   * @example
+   * const conv = await ApiClient.getConversation(projectId, conversationId);
+   * console.log(`Loaded ${conv.messages.length} messages`);
+   */
   ApiClient.getConversation = function(projectId, conversationId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/conversation', { conversationId: conversationId });
   };
 
+  /**
+   * Search conversation history
+   * @function searchConversationHistory
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} query - Search query text
+   * @returns {Promise<Array<{conversationId: string, messageId: string, content: string, timestamp: string}>>} Search results
+   * @example
+   * const results = await ApiClient.searchConversationHistory(projectId, 'authentication');
+   * results.forEach(r => console.log(`Found in ${r.conversationId}: ${r.content}`));
+   */
   ApiClient.searchConversationHistory = function(projectId, query) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/conversations/search', { q: query });
   };
 
+  /**
+   * Rename a conversation with custom label
+   * @function renameConversation
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} conversationId - Conversation UUID
+   * @param {string} label - New label for the conversation
+   * @returns {Promise<void>} Resolves when renamed
+   * @throws {Error} If conversation not found
+   * @example
+   * await ApiClient.renameConversation(projectId, conversationId, 'Auth Implementation');
+   */
   ApiClient.renameConversation = function(projectId, conversationId, label) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/conversations/' + conversationId,
@@ -256,6 +575,15 @@
     });
   };
 
+  /**
+   * Set the current active conversation
+   * @function setCurrentConversation
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} conversationId - Conversation UUID
+   * @returns {Promise<void>} Resolves when set
+   * @deprecated Frontend manages current conversation locally
+   */
   ApiClient.setCurrentConversation = function(projectId, conversationId) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/conversation/current',
@@ -269,10 +597,38 @@
   // Claude Files
   // ============================================================
 
+  /**
+   * Get CLAUDE.md files for a project (global and project-specific)
+   * @function getClaudeFiles
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<Array<{filePath: string, content: string, exists: boolean}>>} Claude instruction files
+   * @example
+   * const files = await ApiClient.getClaudeFiles(projectId);
+   * files.forEach(f => {
+   *   console.log(`${f.filePath}: ${f.exists ? 'exists' : 'not found'}`);
+   * });
+   */
   ApiClient.getClaudeFiles = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/claude-files');
   };
 
+  /**
+   * Save content to a CLAUDE.md file
+   * @function saveClaudeFile
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} filePath - Absolute path to CLAUDE.md file
+   * @param {string} content - File content to save
+   * @returns {Promise<void>} Resolves when saved
+   * @throws {Error} If file path is invalid or write fails
+   * @example
+   * await ApiClient.saveClaudeFile(
+   *   projectId,
+   *   '/home/user/.claude/CLAUDE.md',
+   *   '# Global Claude Instructions\n\n...'
+   * );
+   */
   ApiClient.saveClaudeFile = function(projectId, filePath, content) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/claude-files',
@@ -282,6 +638,18 @@
     });
   };
 
+  /**
+   * Get optimization suggestions for CLAUDE.md and ROADMAP.md files
+   * @function getOptimizations
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{suggestions: Array<{file: string, issue: string, recommendation: string}>}>} Optimization suggestions
+   * @example
+   * const opts = await ApiClient.getOptimizations(projectId);
+   * opts.suggestions.forEach(s => {
+   *   console.log(`${s.file}: ${s.issue} - ${s.recommendation}`);
+   * });
+   */
   ApiClient.getOptimizations = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/optimizations');
   };
@@ -290,10 +658,35 @@
   // Settings
   // ============================================================
 
+  /**
+   * Get global application settings
+   * @function getSettings
+   * @memberof module:ApiClient
+   * @returns {Promise<Claudito.API.Settings>} Global settings object
+   * @example
+   * const settings = await ApiClient.getSettings();
+   * console.log(`Max agents: ${settings.maxConcurrentAgents}`);
+   * console.log(`Default model: ${settings.defaultModel}`);
+   */
   ApiClient.getSettings = function() {
     return $.get(baseUrl + '/api/settings');
   };
 
+  /**
+   * Update global application settings
+   * @function updateSettings
+   * @memberof module:ApiClient
+   * @param {Partial<Claudito.API.Settings>} settings - Settings to update
+   * @returns {Promise<Claudito.API.Settings>} Updated settings
+   * @throws {Error} If validation fails
+   * @example
+   * // Update multiple settings
+   * const updated = await ApiClient.updateSettings({
+   *   maxConcurrentAgents: 5,
+   *   sendWithCtrlEnter: false,
+   *   defaultModel: 'claude-sonnet-4-20250514'
+   * });
+   */
   ApiClient.updateSettings = function(settings) {
     return $.ajax({
       url: baseUrl + '/api/settings',
@@ -305,7 +698,14 @@
 
   /**
    * Get available Claude models
-   * @returns {Promise} Resolves with {models: [{id, displayName}]}
+   * @function getAvailableModels
+   * @memberof module:ApiClient
+   * @returns {Promise<{models: Array<{id: string, displayName: string}>}>} Available models
+   * @example
+   * const result = await ApiClient.getAvailableModels();
+   * result.models.forEach(m => {
+   *   console.log(`${m.displayName} (${m.id})`);
+   * });
    */
   ApiClient.getAvailableModels = function() {
     return $.get(baseUrl + '/api/settings/models');
@@ -317,18 +717,33 @@
 
   /**
    * Get project model configuration
-   * @param {string} projectId - Project ID
-   * @returns {Promise} Resolves with {projectModel, effectiveModel, globalDefault}
+   * @function getProjectModel
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{projectModel: string|null, effectiveModel: string, globalDefault: string}>} Model configuration
+   * @example
+   * const config = await ApiClient.getProjectModel(projectId);
+   * console.log(`Using: ${config.effectiveModel}`);
+   * console.log(`Override: ${config.projectModel || 'none'}`);
+   * console.log(`Default: ${config.globalDefault}`);
    */
   ApiClient.getProjectModel = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/model');
   };
 
   /**
-   * Set project model override
-   * @param {string} projectId - Project ID
+   * Set project-specific model override
+   * @function setProjectModel
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string|null} model - Model ID or null to clear override
-   * @returns {Promise} Resolves on success
+   * @returns {Promise<void>} Resolves when updated
+   * @example
+   * // Set project to use Opus
+   * await ApiClient.setProjectModel(projectId, 'claude-opus-4-20250514');
+   *
+   * // Clear override to use global default
+   * await ApiClient.setProjectModel(projectId, null);
    */
   ApiClient.setProjectModel = function(projectId, model) {
     return $.ajax({
@@ -339,26 +754,124 @@
     });
   };
 
+  /**
+   * Get project MCP overrides
+   * @function getProjectMcpOverrides
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{enabled: boolean, serverOverrides: Object}>} MCP overrides
+   * @example
+   * const overrides = await ApiClient.getProjectMcpOverrides(projectId);
+   * console.log(`MCP enabled: ${overrides.enabled}`);
+   */
+  ApiClient.getProjectMcpOverrides = function(projectId) {
+    return $.get(baseUrl + '/api/projects/' + projectId + '/mcp-overrides');
+  };
+
+  /**
+   * Update project MCP overrides
+   * @function updateProjectMcpOverrides
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {Object} overrides - MCP override configuration
+   * @returns {Promise<{overrides: Object, agentRestarted: boolean}>} Update result
+   * @example
+   * const result = await ApiClient.updateProjectMcpOverrides(projectId, {
+   *   enabled: true,
+   *   serverOverrides: { 'server-1': { enabled: false } }
+   * });
+   * if (result.agentRestarted) {
+   *   console.log('Agent was restarted');
+   * }
+   */
+  ApiClient.updateProjectMcpOverrides = function(projectId, overrides) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/mcp-overrides',
+      method: 'PUT',
+      contentType: 'application/json',
+      data: JSON.stringify(overrides)
+    });
+  };
+
   // ============================================================
   // Filesystem
   // ============================================================
 
+  /**
+   * Get available drives on the system
+   * @function getDrives
+   * @memberof module:ApiClient
+   * @returns {Promise<Array<{name: string, path: string}>>} Available drives
+   * @example
+   * const drives = await ApiClient.getDrives();
+   * // On Windows: [{name: 'C:', path: 'C:\\'}, {name: 'D:', path: 'D:\\'}]
+   * // On Unix: [{name: '/', path: '/'}]
+   */
   ApiClient.getDrives = function() {
     return $.get(baseUrl + '/api/fs/drives');
   };
 
+  /**
+   * Browse directory contents (directories only)
+   * @function browseFolder
+   * @memberof module:ApiClient
+   * @param {string} path - Directory path to browse
+   * @returns {Promise<Array<{name: string, path: string, isDirectory: true}>>} Directory entries
+   * @throws {Error} If path doesn't exist or isn't accessible
+   * @example
+   * const dirs = await ApiClient.browseFolder('/home/user/projects');
+   * dirs.forEach(d => console.log(d.name));
+   */
   ApiClient.browseFolder = function(path) {
     return $.get(baseUrl + '/api/fs/browse', { path: path });
   };
 
+  /**
+   * Browse directory contents with files included
+   * @function browseWithFiles
+   * @memberof module:ApiClient
+   * @param {string} path - Directory path to browse
+   * @returns {Promise<Array<{name: string, path: string, isDirectory: boolean, isEditable?: boolean}>>} All entries
+   * @throws {Error} If path doesn't exist or isn't accessible
+   * @example
+   * const entries = await ApiClient.browseWithFiles('/project');
+   * entries.forEach(e => {
+   *   console.log(`${e.name} (${e.isDirectory ? 'dir' : 'file'})`);
+   * });
+   */
   ApiClient.browseWithFiles = function(path) {
     return $.get(baseUrl + '/api/fs/browse-with-files', { path: path });
   };
 
+  /**
+   * Read file contents
+   * @function readFile
+   * @memberof module:ApiClient
+   * @param {string} path - File path to read
+   * @returns {Promise<string>} File contents as text
+   * @throws {Error} If file doesn't exist or isn't readable
+   * @example
+   * const content = await ApiClient.readFile('/project/README.md');
+   * console.log(content);
+   */
   ApiClient.readFile = function(path) {
     return $.get(baseUrl + '/api/fs/read', { path: path });
   };
 
+  /**
+   * Write content to a file
+   * @function writeFile
+   * @memberof module:ApiClient
+   * @param {string} path - File path to write
+   * @param {string} content - Content to write
+   * @returns {Promise<void>} Resolves when written
+   * @throws {Error} If path is invalid or write fails
+   * @example
+   * await ApiClient.writeFile(
+   *   '/project/config.json',
+   *   JSON.stringify({debug: true}, null, 2)
+   * );
+   */
   ApiClient.writeFile = function(path, content) {
     return $.ajax({
       url: baseUrl + '/api/fs/write',
@@ -368,6 +881,16 @@
     });
   };
 
+  /**
+   * Create a new directory
+   * @function createFolder
+   * @memberof module:ApiClient
+   * @param {string} path - Directory path to create
+   * @returns {Promise<void>} Resolves when created
+   * @throws {Error} If directory already exists or parent doesn't exist
+   * @example
+   * await ApiClient.createFolder('/project/src/components');
+   */
   ApiClient.createFolder = function(path) {
     return $.ajax({
       url: baseUrl + '/api/fs/mkdir',
@@ -377,6 +900,21 @@
     });
   };
 
+  /**
+   * Delete a file or directory
+   * @function deleteFileOrFolder
+   * @memberof module:ApiClient
+   * @param {string} targetPath - Path to delete
+   * @param {boolean} isDirectory - True if deleting a directory
+   * @returns {Promise<void>} Resolves when deleted
+   * @throws {Error} If path doesn't exist or deletion fails
+   * @example
+   * // Delete a file
+   * await ApiClient.deleteFileOrFolder('/project/old.txt', false);
+   *
+   * // Delete a directory
+   * await ApiClient.deleteFileOrFolder('/project/temp', true);
+   */
   ApiClient.deleteFileOrFolder = function(targetPath, isDirectory) {
     return $.ajax({
       url: baseUrl + '/api/fs/delete',
@@ -390,18 +928,70 @@
   // Git
   // ============================================================
 
+  /**
+   * Get Git repository status
+   * @function getGitStatus
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<Claudito.API.GitStatus>} Git status information
+   * @example
+   * const status = await ApiClient.getGitStatus(projectId);
+   * console.log(`On branch: ${status.branch}`);
+   * console.log(`${status.staged.length} staged files`);
+   * console.log(`${status.unstaged.length} unstaged changes`);
+   */
   ApiClient.getGitStatus = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/git/status');
   };
 
+  /**
+   * Get list of Git branches
+   * @function getGitBranches
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{current: string, local: Array<string>, remote: Array<string>}>} Branch information
+   * @example
+   * const branches = await ApiClient.getGitBranches(projectId);
+   * console.log(`Current: ${branches.current}`);
+   * branches.local.forEach(b => console.log(`Local: ${b}`));
+   */
   ApiClient.getGitBranches = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/git/branches');
   };
 
+  /**
+   * Get Git diff for staged or unstaged changes
+   * @function getGitDiff
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {boolean} staged - True for staged diff, false for unstaged
+   * @returns {Promise<string>} Diff output in unified format
+   * @example
+   * // Get unstaged changes
+   * const diff = await ApiClient.getGitDiff(projectId, false);
+   *
+   * // Get staged changes
+   * const stagedDiff = await ApiClient.getGitDiff(projectId, true);
+   */
   ApiClient.getGitDiff = function(projectId, staged) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/git/diff', { staged: staged ? 'true' : 'false' });
   };
 
+  /**
+   * Get Git diff for a specific file
+   * @function getGitFileDiff
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} filePath - File path relative to repository root
+   * @param {boolean} staged - True for staged diff, false for unstaged
+   * @returns {Promise<string>} File diff in unified format
+   * @example
+   * const diff = await ApiClient.getGitFileDiff(
+   *   projectId,
+   *   'src/main.js',
+   *   false // unstaged
+   * );
+   */
   ApiClient.getGitFileDiff = function(projectId, filePath, staged) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/git/file-diff', {
       path: filePath,
@@ -409,10 +999,31 @@
     });
   };
 
+  /**
+   * Get list of Git tags
+   * @function getGitTags
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<Array<{name: string, commit: string, date: string}>>} Tag information
+   * @example
+   * const tags = await ApiClient.getGitTags(projectId);
+   * tags.forEach(t => console.log(`${t.name} at ${t.commit}`));
+   */
   ApiClient.getGitTags = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/git/tags');
   };
 
+  /**
+   * Stage specific files for commit
+   * @function gitStage
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {Array<string>} paths - File paths to stage
+   * @returns {Promise<void>} Resolves when staged
+   * @throws {Error} If files not found or staging fails
+   * @example
+   * await ApiClient.gitStage(projectId, ['src/app.js', 'README.md']);
+   */
   ApiClient.gitStage = function(projectId, paths) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/stage',
@@ -422,10 +1033,27 @@
     });
   };
 
+  /**
+   * Stage all changes for commit
+   * @function gitStageAll
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<void>} Resolves when all changes staged
+   */
   ApiClient.gitStageAll = function(projectId) {
     return $.post(baseUrl + '/api/projects/' + projectId + '/git/stage-all');
   };
 
+  /**
+   * Unstage specific files
+   * @function gitUnstage
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {Array<string>} paths - File paths to unstage
+   * @returns {Promise<void>} Resolves when unstaged
+   * @example
+   * await ApiClient.gitUnstage(projectId, ['src/test.js']);
+   */
   ApiClient.gitUnstage = function(projectId, paths) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/unstage',
@@ -435,10 +1063,32 @@
     });
   };
 
+  /**
+   * Unstage all changes
+   * @function gitUnstageAll
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<void>} Resolves when all changes unstaged
+   */
   ApiClient.gitUnstageAll = function(projectId) {
     return $.post(baseUrl + '/api/projects/' + projectId + '/git/unstage-all');
   };
 
+  /**
+   * Create a Git commit
+   * @function gitCommit
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} message - Commit message
+   * @returns {Promise<{hash: string}>} Commit hash
+   * @throws {Error} If no changes staged or commit fails
+   * @example
+   * const result = await ApiClient.gitCommit(
+   *   projectId,
+   *   'feat: Add user authentication'
+   * );
+   * console.log(`Created commit: ${result.hash}`);
+   */
   ApiClient.gitCommit = function(projectId, message) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/commit',
@@ -448,6 +1098,19 @@
     });
   };
 
+  /**
+   * Create a new Git branch
+   * @function gitCreateBranch
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} name - Branch name
+   * @param {boolean} checkout - Whether to checkout the new branch
+   * @returns {Promise<void>} Resolves when branch created
+   * @throws {Error} If branch already exists
+   * @example
+   * // Create and checkout new branch
+   * await ApiClient.gitCreateBranch(projectId, 'feature/auth', true);
+   */
   ApiClient.gitCreateBranch = function(projectId, name, checkout) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/branch',
@@ -457,6 +1120,17 @@
     });
   };
 
+  /**
+   * Checkout a Git branch
+   * @function gitCheckout
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} branch - Branch name to checkout
+   * @returns {Promise<void>} Resolves when checked out
+   * @throws {Error} If branch doesn't exist or checkout fails
+   * @example
+   * await ApiClient.gitCheckout(projectId, 'main');
+   */
   ApiClient.gitCheckout = function(projectId, branch) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/checkout',
@@ -466,6 +1140,20 @@
     });
   };
 
+  /**
+   * Push commits to remote repository
+   * @function gitPush
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} remote - Remote name (e.g., 'origin')
+   * @param {string} branch - Branch to push
+   * @param {boolean} [setUpstream] - Set upstream tracking
+   * @returns {Promise<void>} Resolves when pushed
+   * @throws {Error} If push fails (e.g., authentication, conflicts)
+   * @example
+   * // Push with upstream
+   * await ApiClient.gitPush(projectId, 'origin', 'feature/auth', true);
+   */
   ApiClient.gitPush = function(projectId, remote, branch, setUpstream) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/push',
@@ -475,6 +1163,18 @@
     });
   };
 
+  /**
+   * Pull commits from remote repository
+   * @function gitPull
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} remote - Remote name (e.g., 'origin')
+   * @param {string} branch - Branch to pull
+   * @returns {Promise<void>} Resolves when pulled
+   * @throws {Error} If pull fails (e.g., conflicts, authentication)
+   * @example
+   * await ApiClient.gitPull(projectId, 'origin', 'main');
+   */
   ApiClient.gitPull = function(projectId, remote, branch) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/pull',
@@ -484,6 +1184,17 @@
     });
   };
 
+  /**
+   * Discard changes to specific files
+   * @function gitDiscard
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {Array<string>} paths - File paths to discard changes
+   * @returns {Promise<void>} Resolves when changes discarded
+   * @warning This permanently removes uncommitted changes
+   * @example
+   * await ApiClient.gitDiscard(projectId, ['src/test.js']);
+   */
   ApiClient.gitDiscard = function(projectId, paths) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/discard',
@@ -493,6 +1204,19 @@
     });
   };
 
+  /**
+   * Create a Git tag
+   * @function gitCreateTag
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} name - Tag name
+   * @param {string} [message] - Annotated tag message
+   * @returns {Promise<void>} Resolves when tag created
+   * @throws {Error} If tag already exists
+   * @example
+   * // Create annotated tag
+   * await ApiClient.gitCreateTag(projectId, 'v1.0.0', 'Initial release');
+   */
   ApiClient.gitCreateTag = function(projectId, name, message) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/tags',
@@ -502,6 +1226,18 @@
     });
   };
 
+  /**
+   * Push a tag to remote repository
+   * @function gitPushTag
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} name - Tag name to push
+   * @param {string} remote - Remote name (e.g., 'origin')
+   * @returns {Promise<void>} Resolves when tag pushed
+   * @throws {Error} If tag doesn't exist or push fails
+   * @example
+   * await ApiClient.gitPushTag(projectId, 'v1.0.0', 'origin');
+   */
   ApiClient.gitPushTag = function(projectId, name, remote) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/git/tags/' + encodeURIComponent(name) + '/push',
@@ -515,18 +1251,59 @@
   // Shell
   // ============================================================
 
+  /**
+   * Check if shell feature is enabled
+   * @function isShellEnabled
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{enabled: boolean}>} Shell availability
+   * @example
+   * const result = await ApiClient.isShellEnabled(projectId);
+   * if (result.enabled) {
+   *   console.log('Shell is available');
+   * }
+   */
   ApiClient.isShellEnabled = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/shell/enabled');
   };
 
+  /**
+   * Start an interactive shell session
+   * @function startShell
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{pid: number}>} Shell process information
+   * @throws {Error} If shell is already running
+   * @example
+   * const shell = await ApiClient.startShell(projectId);
+   * console.log(`Started shell with PID: ${shell.pid}`);
+   */
   ApiClient.startShell = function(projectId) {
     return $.post(baseUrl + '/api/projects/' + projectId + '/shell/start');
   };
 
+  /**
+   * Get shell session status
+   * @function getShellStatus
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<{running: boolean, pid?: number}>} Shell status
+   */
   ApiClient.getShellStatus = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/shell/status');
   };
 
+  /**
+   * Send input to the shell
+   * @function sendShellInput
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {string} input - Command or text to send
+   * @returns {Promise<void>} Resolves when input sent
+   * @throws {Error} If shell not running
+   * @example
+   * await ApiClient.sendShellInput(projectId, 'ls -la\n');
+   */
   ApiClient.sendShellInput = function(projectId, input) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/shell/input',
@@ -536,6 +1313,18 @@
     });
   };
 
+  /**
+   * Resize the shell terminal
+   * @function resizeShell
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @param {number} cols - Number of columns
+   * @param {number} rows - Number of rows
+   * @returns {Promise<void>} Resolves when resized
+   * @example
+   * // Resize to 120x30
+   * await ApiClient.resizeShell(projectId, 120, 30);
+   */
   ApiClient.resizeShell = function(projectId, cols, rows) {
     return $.ajax({
       url: baseUrl + '/api/projects/' + projectId + '/shell/resize',
@@ -545,6 +1334,13 @@
     });
   };
 
+  /**
+   * Stop the shell session
+   * @function stopShell
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<void>} Resolves when shell stopped
+   */
   ApiClient.stopShell = function(projectId) {
     return $.post(baseUrl + '/api/projects/' + projectId + '/shell/stop');
   };
@@ -555,13 +1351,24 @@
 
   /**
    * Start a new Ralph Loop for a project
-   * @param {string} projectId - Project ID
+   * @function startRalphLoop
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {Object} config - Loop configuration
    * @param {string} config.taskDescription - Task description for the worker
-   * @param {number} [config.maxTurns] - Maximum iterations (default: 5)
+   * @param {number} [config.maxTurns=5] - Maximum iterations
    * @param {string} [config.workerModel] - Model for worker agent
    * @param {string} [config.reviewerModel] - Model for reviewer agent
-   * @returns {Promise} Resolves with the new Ralph Loop state
+   * @returns {Promise<Claudito.API.RalphLoopState>} New Ralph Loop state
+   * @throws {Error} If agent is already running
+   * @example
+   * const loop = await ApiClient.startRalphLoop(projectId, {
+   *   taskDescription: 'Implement user authentication with JWT',
+   *   maxTurns: 10,
+   *   workerModel: 'claude-sonnet-4-20250514',
+   *   reviewerModel: 'claude-opus-4-20250514'
+   * });
+   * console.log(`Started loop ${loop.taskId}`);
    */
   ApiClient.startRalphLoop = function(projectId, config) {
     return $.ajax({
@@ -574,9 +1381,14 @@
 
   /**
    * Stop a running Ralph Loop
-   * @param {string} projectId - Project ID
+   * @function stopRalphLoop
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string} taskId - Task ID of the loop to stop
-   * @returns {Promise} Resolves on success
+   * @returns {Promise<void>} Resolves when stopped
+   * @throws {Error} If loop not found
+   * @example
+   * await ApiClient.stopRalphLoop(projectId, taskId);
    */
   ApiClient.stopRalphLoop = function(projectId, taskId) {
     return $.ajax({
@@ -587,9 +1399,14 @@
 
   /**
    * Pause a running Ralph Loop
-   * @param {string} projectId - Project ID
+   * @function pauseRalphLoop
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string} taskId - Task ID of the loop to pause
-   * @returns {Promise} Resolves on success
+   * @returns {Promise<void>} Resolves when paused
+   * @throws {Error} If loop not running
+   * @example
+   * await ApiClient.pauseRalphLoop(projectId, taskId);
    */
   ApiClient.pauseRalphLoop = function(projectId, taskId) {
     return $.ajax({
@@ -600,9 +1417,14 @@
 
   /**
    * Resume a paused Ralph Loop
-   * @param {string} projectId - Project ID
+   * @function resumeRalphLoop
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string} taskId - Task ID of the loop to resume
-   * @returns {Promise} Resolves on success
+   * @returns {Promise<void>} Resolves when resumed
+   * @throws {Error} If loop not paused
+   * @example
+   * await ApiClient.resumeRalphLoop(projectId, taskId);
    */
   ApiClient.resumeRalphLoop = function(projectId, taskId) {
     return $.ajax({
@@ -613,8 +1435,15 @@
 
   /**
    * Get all Ralph Loops for a project
-   * @param {string} projectId - Project ID
-   * @returns {Promise} Resolves with array of Ralph Loop states
+   * @function getRalphLoops
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
+   * @returns {Promise<Array<Claudito.API.RalphLoopState>>} Array of Ralph Loop states
+   * @example
+   * const loops = await ApiClient.getRalphLoops(projectId);
+   * loops.forEach(loop => {
+   *   console.log(`${loop.taskId}: ${loop.status} (${loop.currentIteration}/${loop.maxTurns})`);
+   * });
    */
   ApiClient.getRalphLoops = function(projectId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/ralph-loop');
@@ -622,9 +1451,17 @@
 
   /**
    * Get a specific Ralph Loop state
-   * @param {string} projectId - Project ID
+   * @function getRalphLoopState
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string} taskId - Task ID of the loop
-   * @returns {Promise} Resolves with the Ralph Loop state
+   * @returns {Promise<Claudito.API.RalphLoopState>} Ralph Loop state
+   * @throws {Error} If loop not found
+   * @example
+   * const state = await ApiClient.getRalphLoopState(projectId, taskId);
+   * if (state.status === 'completed') {
+   *   console.log(`Final result: ${state.finalResult}`);
+   * }
    */
   ApiClient.getRalphLoopState = function(projectId, taskId) {
     return $.get(baseUrl + '/api/projects/' + projectId + '/ralph-loop/' + taskId);
@@ -632,9 +1469,14 @@
 
   /**
    * Delete a Ralph Loop
-   * @param {string} projectId - Project ID
+   * @function deleteRalphLoop
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project UUID
    * @param {string} taskId - Task ID of the loop to delete
-   * @returns {Promise} Resolves on success
+   * @returns {Promise<void>} Resolves when deleted
+   * @throws {Error} If loop is still running
+   * @example
+   * await ApiClient.deleteRalphLoop(projectId, taskId);
    */
   ApiClient.deleteRalphLoop = function(projectId, taskId) {
     return $.ajax({
@@ -649,14 +1491,28 @@
 
   /**
    * Log a frontend error to the backend
+   * @function logFrontendError
+   * @memberof module:ApiClient
    * @param {string} message - Error message
-   * @param {string} source - Source file
-   * @param {number} line - Line number
-   * @param {number} column - Column number
-   * @param {Error} errorObj - Error object
-   * @param {string} projectId - Current project ID
+   * @param {string} source - Source file where error occurred
+   * @param {number} line - Line number of error
+   * @param {number} column - Column number of error
+   * @param {Error} errorObj - JavaScript Error object
+   * @param {string} [projectId] - Current project UUID for context
+   * @returns {Promise<void>} Resolves when logged (fails silently)
+   * @example
+   * window.onerror = function(msg, url, line, col, error) {
+   *   ApiClient.logFrontendError(
+   *     msg,
+   *     url,
+   *     line,
+   *     col,
+   *     error,
+   *     state.selectedProjectId
+   *   );
+   * };
    */
-  ApiClient.logFrontendError = function(message, source, line, column, errorObj, projectId) {
+  ApiClient.logFrontendError = function(message, source, line, column, errorObj, projectId, additionalData) {
     var errorData = {
       message: message,
       source: source,
@@ -666,6 +1522,12 @@
       projectId: projectId,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null
     };
+
+    // Merge additional data if provided
+    if (additionalData) {
+      errorData.clientId = additionalData.clientId;
+      errorData.errorType = additionalData.errorType;
+    }
 
     // Send to backend silently (don't show errors if this fails)
     return $.ajax({
@@ -682,7 +1544,14 @@
 
   /**
    * Initialize global 401 handler to redirect to login on unauthorized
-   * Should be called once when the app starts
+   * @function init
+   * @memberof module:ApiClient
+   * @description Sets up automatic redirect to login page on 401 responses.
+   * Should be called once when the app starts.
+   * @example
+   * $(document).ready(function() {
+   *   ApiClient.init();
+   * });
    */
   ApiClient.init = function() {
     if (typeof $ !== 'undefined' && typeof document !== 'undefined') {
@@ -696,7 +1565,14 @@
 
   /**
    * Check authentication status
-   * @returns {Promise} Resolves with {authenticated: boolean}
+   * @function getAuthStatus
+   * @memberof module:ApiClient
+   * @returns {Promise<{authenticated: boolean}>} Authentication status
+   * @example
+   * const auth = await ApiClient.getAuthStatus();
+   * if (!auth.authenticated) {
+   *   window.location.href = '/login';
+   * }
    */
   ApiClient.getAuthStatus = function() {
     return $.get(baseUrl + '/api/auth/status');
@@ -704,7 +1580,13 @@
 
   /**
    * Logout and redirect to login page
-   * @returns {Promise} Resolves on successful logout
+   * @function logout
+   * @memberof module:ApiClient
+   * @returns {Promise<void>} Redirects to login after logout
+   * @example
+   * $('#logout-button').click(function() {
+   *   ApiClient.logout();
+   * });
    */
   ApiClient.logout = function() {
     return $.post(baseUrl + '/api/auth/logout').done(function() {

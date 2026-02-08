@@ -732,9 +732,17 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
 
   // Send input to running interactive agent
   router.post('/:id/agent/send', asyncHandler(async (req: Request, res: Response) => {
+    const logger = getLogger('agent-send');
     const id = req.params['id'] as string;
     const body = req.body as AgentMessageBody;
     const { message, images } = body;
+
+    logger.info('Received send request', {
+      projectId: id,
+      messageLength: message?.length ?? 0,
+      hasImages: !!images && images.length > 0,
+    });
+
     const project = await projectRepository.findById(id);
 
     if (!project) {
@@ -746,17 +754,23 @@ export function createProjectsRouter(deps: ProjectRouterDependencies): Router {
       throw new ValidationError('Message or images required');
     }
 
-    if (!agentManager.isRunning(id)) {
+    const isRunning = agentManager.isRunning(id);
+    logger.info('Agent status check', { isRunning });
+
+    if (!isRunning) {
       throw new ValidationError('Agent is not running');
     }
 
     const mode = agentManager.getAgentMode(id);
+    logger.info('Agent mode check', { mode });
 
     if (mode !== 'interactive') {
       throw new ValidationError('Agent is not in interactive mode');
     }
 
+    logger.info('Calling sendInput');
     agentManager.sendInput(id, message ?? '', images);
+    logger.info('sendInput completed');
     res.json({ success: true });
   }));
 

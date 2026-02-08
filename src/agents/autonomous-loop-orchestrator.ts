@@ -4,7 +4,6 @@ import { getLogger, Logger } from '../utils';
 import {
   ProjectRepository,
   ConversationRepository,
-  MilestoneItemRef,
 } from '../repositories';
 import {
   InstructionGenerator,
@@ -61,7 +60,7 @@ interface LoopStateInternal {
 export class AutonomousLoopOrchestrator {
   private readonly loopStates: Map<string, LoopStateInternal> = new Map();
   private readonly logger: Logger;
-  private readonly listeners: Map<keyof AutonomousLoopEvents, Set<Function>> = new Map();
+  private readonly listeners: Map<keyof AutonomousLoopEvents, Set<(...args: unknown[]) => void>> = new Map();
 
   constructor(
     private readonly projectRepository: ProjectRepository,
@@ -230,11 +229,11 @@ export class AutonomousLoopOrchestrator {
   /**
    * Generate instructions for a milestone.
    */
-  async generateMilestoneInstructions(
+  generateMilestoneInstructions(
     projectId: string,
     projectName: string,
     milestone: MilestoneRef
-  ): Promise<string> {
+  ): string {
     // For now, we'll skip setting the next item as the interface doesn't match
     // This would need to be refactored to use the actual MilestoneItemRef structure
     // which includes itemIndex and taskTitle
@@ -337,7 +336,7 @@ export class AutonomousLoopOrchestrator {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener);
+    this.listeners.get(event)!.add(listener as (...args: unknown[]) => void);
   }
 
   /**
@@ -349,7 +348,7 @@ export class AutonomousLoopOrchestrator {
   ): void {
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
-      eventListeners.delete(listener);
+      eventListeners.delete(listener as (...args: unknown[]) => void);
     }
   }
 
@@ -421,7 +420,7 @@ export class AutonomousLoopOrchestrator {
     if (listeners) {
       listeners.forEach((listener) => {
         try {
-          (listener as Function)(...args);
+          (listener as (...args: Parameters<AutonomousLoopEvents[K]>) => void)(...args);
         } catch (error) {
           this.logger.error(`Error in ${event} listener`, { error });
         }

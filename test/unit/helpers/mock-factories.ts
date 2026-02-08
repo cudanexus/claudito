@@ -16,9 +16,11 @@ import {
   Conversation,
   ConversationMetadata,
   ConversationFileSystem,
-  ProjectPathResolver,
   SearchResult,
 } from '../../../src/repositories/conversation';
+import {
+  ProjectPathResolver,
+} from '../../../src/repositories/interfaces';
 import {
   ClaudeAgent,
   AgentStatus,
@@ -113,7 +115,7 @@ export const sampleDirectoryEntries: DirectoryEntry[] = [
 export const sampleFileContent = 'export const hello = "world";';
 
 export const sampleProject: ProjectStatus = {
-  id: 'test-project-id',
+  id: '123e4567-e89b-12d3-a456-426614174000',
   name: 'Test Project',
   path: '/path/to/project',
   status: 'stopped',
@@ -123,13 +125,14 @@ export const sampleProject: ProjectStatus = {
   lastContextUsage: null,
   permissionOverrides: null,
   modelOverride: null,
+  mcpOverrides: null,
   createdAt: '2024-01-01T00:00:00.000Z',
   updatedAt: '2024-01-01T00:00:00.000Z',
 };
 
 export const sampleConversation: Conversation = {
   id: 'conv-uuid-1234',
-  projectId: 'test-project-id',
+  projectId: '123e4567-e89b-12d3-a456-426614174000',
   itemRef: null,
   messages: [],
   createdAt: '2024-01-01T00:00:00.000Z',
@@ -277,6 +280,7 @@ export function createMockProjectRepository(
         lastContextUsage: null,
         permissionOverrides: null,
         modelOverride: null,
+        mcpOverrides: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -336,6 +340,14 @@ export function createMockProjectRepository(
 
       if (!project) return Promise.resolve(null);
       project.modelOverride = model;
+      project.updatedAt = new Date().toISOString();
+      return Promise.resolve({ ...project });
+    }),
+    updateMcpOverrides: jest.fn().mockImplementation((id: string, overrides: any) => {
+      const project = projects.get(id);
+
+      if (!project) return Promise.resolve(null);
+      project.mcpOverrides = overrides;
       project.updatedAt = new Date().toISOString();
       return Promise.resolve({ ...project });
     }),
@@ -532,6 +544,7 @@ export interface MockChildProcess {
   on: jest.Mock;
   once: jest.Mock;
   kill: jest.Mock;
+  removeAllListeners: jest.Mock;
 }
 
 export function createMockChildProcess(pid = 12345): MockChildProcess {
@@ -553,6 +566,7 @@ export function createMockChildProcess(pid = 12345): MockChildProcess {
     on: onMock,
     once: onceMock,
     kill: jest.fn(),
+    removeAllListeners: jest.fn(),
   };
 }
 
@@ -578,6 +592,7 @@ export function createMockClaudeAgent(projectId = 'test-project'): jest.Mocked<C
   let waitingVersion = 0;
   let contextUsage: ContextUsage | null = null;
   const queuedMessages: string[] = [];
+  let sessionId = 'mock-session-' + Math.random().toString(36).substring(7);
 
   const agent: jest.Mocked<ClaudeAgent> = {
     projectId,
@@ -591,7 +606,7 @@ export function createMockClaudeAgent(projectId = 'test-project'): jest.Mocked<C
     get queuedMessages() { return [...queuedMessages]; },
     get isWaitingForInput() { return mode === 'interactive' && status === 'running' && !isProcessing; },
     get waitingVersion() { return waitingVersion; },
-    get sessionId() { return null; },
+    get sessionId() { return sessionId; },
     get sessionError() { return null; },
     get permissionMode() { return null; },
     start: jest.fn().mockImplementation(() => {
@@ -639,6 +654,7 @@ export function createMockClaudeAgent(projectId = 'test-project'): jest.Mocked<C
     emitter.emit('waitingForInput', { isWaiting: !p && mode === 'interactive' && status === 'running', version: waitingVersion });
   };
   (agent as unknown as { _setContextUsage: (c: ContextUsage | null) => void })._setContextUsage = (c) => { contextUsage = c; };
+  (agent as unknown as { _setSessionId: (id: string) => void })._setSessionId = (id) => { sessionId = id; };
   (agent as unknown as { _emit: <K extends keyof AgentEvents>(event: K, ...args: Parameters<AgentEvents[K]>) => void })._emit = (event, ...args) => {
     emitter.emit(event, ...args);
   };
@@ -719,6 +735,7 @@ export function createMockPermissionGenerator(): jest.Mocked<PermissionGenerator
       skipPermissions: false,
     } as PermissionArgs),
     buildCliArgs: jest.fn().mockReturnValue([]),
+    generateMcpAllowRules: jest.fn().mockReturnValue([]),
   };
 }
 
@@ -834,6 +851,7 @@ export function createMockProjectService(): jest.Mocked<ProjectService> {
         lastContextUsage: null,
         permissionOverrides: null,
         modelOverride: null,
+        mcpOverrides: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -948,6 +966,7 @@ export function createMockAgentManager(): jest.Mocked<AgentManager> {
     getTrackedProcesses: jest.fn().mockReturnValue([]),
     cleanupOrphanProcesses: jest.fn().mockResolvedValue({ killed: [], failed: [] }),
     restartAllRunningAgents: jest.fn().mockResolvedValue(undefined),
+    restartProjectAgent: jest.fn().mockResolvedValue(undefined),
     getRunningProjectIds: jest.fn().mockImplementation(() => Array.from(runningAgents.keys())),
     on: jest.fn().mockImplementation(<K extends keyof AgentManagerEvents>(
       event: K,
@@ -1070,7 +1089,7 @@ export const sampleRalphLoopConfig: RalphLoopConfig = {
 
 export const sampleRalphLoopState: RalphLoopState = {
   taskId: 'task-123',
-  projectId: 'project-456',
+  projectId: '123e4567-e89b-12d3-a456-426614174000',
   config: sampleRalphLoopConfig,
   currentIteration: 0,
   status: 'idle',

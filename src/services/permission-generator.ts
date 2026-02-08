@@ -1,4 +1,4 @@
-import { ClaudePermissions } from '../repositories/settings';
+import { ClaudePermissions, McpServerConfig } from '../repositories/settings';
 import { ProjectPermissionOverrides } from '../repositories/project';
 
 export interface PermissionArgs {
@@ -9,12 +9,13 @@ export interface PermissionArgs {
 }
 
 export interface PermissionGenerator {
-  generateArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null): PermissionArgs;
-  buildCliArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null): string[];
+  generateArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null, mcpServers?: McpServerConfig[]): PermissionArgs;
+  buildCliArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null, mcpServers?: McpServerConfig[]): string[];
+  generateMcpAllowRules(mcpServers: McpServerConfig[]): string[];
 }
 
 export class DefaultPermissionGenerator implements PermissionGenerator {
-  generateArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null): PermissionArgs {
+  generateArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null, mcpServers?: McpServerConfig[]): PermissionArgs {
     if (permissions.dangerouslySkipPermissions) {
       return {
         allowedTools: [],
@@ -27,6 +28,12 @@ export class DefaultPermissionGenerator implements PermissionGenerator {
     let allowRules = [...permissions.allowRules];
     let denyRules = [...permissions.denyRules];
     let defaultMode = permissions.defaultMode;
+
+    // Add MCP server rules if provided
+    if (mcpServers && mcpServers.length > 0) {
+      const mcpRules = this.generateMcpAllowRules(mcpServers);
+      allowRules = this.mergeRules(allowRules, mcpRules);
+    }
 
     // Apply project overrides if enabled
     if (projectOverrides?.enabled) {
@@ -54,9 +61,9 @@ export class DefaultPermissionGenerator implements PermissionGenerator {
     };
   }
 
-  buildCliArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null): string[] {
+  buildCliArgs(permissions: ClaudePermissions, projectOverrides?: ProjectPermissionOverrides | null, mcpServers?: McpServerConfig[]): string[] {
     const args: string[] = [];
-    const permArgs = this.generateArgs(permissions, projectOverrides);
+    const permArgs = this.generateArgs(permissions, projectOverrides, mcpServers);
 
     if (permArgs.skipPermissions) {
       args.push('--dangerously-skip-permissions');
@@ -106,5 +113,21 @@ export class DefaultPermissionGenerator implements PermissionGenerator {
     }
 
     return Array.from(combined);
+  }
+
+  generateMcpAllowRules(mcpServers: McpServerConfig[]): string[] {
+    const rules: string[] = [];
+
+    for (const server of mcpServers) {
+      // Only generate rules for enabled servers with autoApproveTools enabled (default true)
+      if (server.enabled && (server.autoApproveTools === undefined || server.autoApproveTools === true)) {
+        // Generate wildcard rule for all tools from this MCP server
+        // Format: mcp__<servername>__*
+        const rule = `mcp__${server.name}__*`;
+        rules.push(rule);
+      }
+    }
+
+    return rules;
   }
 }

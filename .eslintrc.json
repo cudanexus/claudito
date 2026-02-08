@@ -25,6 +25,16 @@
   },
   "overrides": [
     {
+      "files": ["src/routes/**/*.ts"],
+      "rules": {
+        "@typescript-eslint/no-misused-promises": ["error", {
+          "checksVoidReturn": {
+            "arguments": false
+          }
+        }]
+      }
+    },
+    {
       "files": ["test/**/*.ts"],
       "rules": {
         "@typescript-eslint/no-unsafe-assignment": "off",

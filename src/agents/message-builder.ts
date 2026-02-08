@@ -1,4 +1,8 @@
 import { AgentMessage, AgentMode } from './claude-agent';
+import { McpServerConfig } from '../repositories/settings';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 /**
  * Utilities for building and formatting agent messages.
@@ -28,6 +32,8 @@ export class MessageBuilder {
 
   /**
    * Build command line arguments for Claude CLI.
+   * Both interactive and autonomous modes use --print with stream-json format.
+   * Messages are always sent via stdin, never as CLI arguments.
    */
   static buildArgs(options: {
     mode: AgentMode;
@@ -46,88 +52,122 @@ export class MessageBuilder {
     skipPermissions?: boolean;
     message?: string;
     env?: Record<string, string>;
+    mcpConfigPath?: string;
   }): string[] {
     const args: string[] = [];
 
-    // Mode-specific arguments
-    if (options.mode === 'interactive') {
-      args.push('--interactive');
+    // Use --print mode for non-interactive piped I/O
+    args.push('--print');
 
-      if (options.sessionId) {
-        args.push('--session-id', options.sessionId);
-      } else if (options.resumeSessionId) {
-        args.push('--resume', options.resumeSessionId);
-      }
-
-      if (options.message) {
-        args.push('--message', options.message);
-      }
-    } else {
-      // Autonomous mode - message is required
-      if (!options.message) {
-        throw new Error('Message is required for autonomous mode');
-      }
-      args.push('--message', options.message);
-    }
-
-    // Common arguments
-    if (options.appendSystemPrompt) {
-      args.push('--append-system-prompt', options.appendSystemPrompt);
-    }
-
+    // Add model selection
     if (options.model) {
       args.push('--model', options.model);
-    }
-
-    if (options.waitForReady) {
-      args.push('--wait-ready');
-    }
-
-    // Agent limits
-    if (options.contextTokens !== undefined && options.contextTokens > 0) {
-      args.push('--max-context-tokens', String(options.contextTokens));
-    }
-
-    if (options.agentTurns !== undefined && options.agentTurns > 0) {
-      args.push('--max-turns', String(options.agentTurns));
-    }
-
-    if (options.totalBudget !== undefined && options.totalBudget > 0) {
-      args.push('--total-budget', String(options.totalBudget));
-    }
-
-    // Streaming options
-    if (options.cacheAnything) {
-      args.push('--cache-anything');
     }
 
     // Permissions
     if (options.skipPermissions) {
       args.push('--dangerously-skip-permissions');
     } else {
-      // Permission mode
-      if (options.permissionMode === 'plan') {
-        args.push('--plan');
-      } else {
-        args.push('--accept-edits');
+      if (options.permissionMode) {
+        args.push('--permission-mode', options.permissionMode);
       }
 
-      // Allowed tools
+      // Allowed tools (space-separated string)
       if (options.allowedTools && options.allowedTools.length > 0) {
-        for (const tool of options.allowedTools) {
-          args.push('--allow', tool);
-        }
+        args.push('--allowedTools', options.allowedTools.join(' '));
       }
 
-      // Disallowed tools
+      // Disallowed tools (space-separated string)
       if (options.disallowedTools && options.disallowedTools.length > 0) {
-        for (const tool of options.disallowedTools) {
-          args.push('--deny', tool);
-        }
+        args.push('--disallowedTools', options.disallowedTools.join(' '));
+      }
+
+      // Append system prompt (only when not skipping permissions)
+      if (options.appendSystemPrompt && options.appendSystemPrompt.trim().length > 0) {
+        args.push('--append-system-prompt', options.appendSystemPrompt.trim());
       }
     }
 
+    // Agent limits
+    if (options.agentTurns !== undefined && options.agentTurns > 0) {
+      args.push('--max-turns', String(options.agentTurns));
+    }
+
+    // Handle session ID: use --session-id for new sessions, --resume for existing
+    if (options.sessionId) {
+      args.push('--session-id', options.sessionId);
+    } else if (options.resumeSessionId) {
+      args.push('--resume', options.resumeSessionId);
+    }
+
+    // stream-json for both input and output (only works with --print)
+    args.push('--input-format', 'stream-json');
+    args.push('--output-format', 'stream-json');
+    args.push('--verbose');
+
+    // Add MCP config file if provided
+    if (options.mcpConfigPath) {
+      args.push('--mcp-config', options.mcpConfigPath);
+    }
+
     return args;
+  }
+
+  /**
+   * Generate MCP configuration file for enabled servers.
+   * Returns the path to the generated config file or null if no servers are enabled.
+   */
+  static generateMcpConfig(servers: McpServerConfig[], projectId: string): string | null {
+    const enabledServers = servers.filter(s => s.enabled);
+    if (enabledServers.length === 0) {
+      return null;
+    }
+
+    // Build the config object
+    const mcpConfig: any = {
+      mcpServers: {}
+    };
+
+    for (const server of enabledServers) {
+      const serverConfig: any = {};
+
+      if (server.type === 'stdio') {
+        serverConfig.command = server.command;
+        if (server.args && server.args.length > 0) {
+          serverConfig.args = server.args;
+        }
+        if (server.env && Object.keys(server.env).length > 0) {
+          serverConfig.env = server.env;
+        }
+      } else if (server.type === 'http') {
+        // For HTTP servers, we need to handle the URL and headers differently
+        serverConfig.transport = {
+          type: 'http',
+          url: server.url
+        };
+        if (server.headers && Object.keys(server.headers).length > 0) {
+          serverConfig.transport.headers = server.headers;
+        }
+      }
+
+      mcpConfig.mcpServers[server.name] = serverConfig;
+    }
+
+    // Create temp directory if it doesn't exist
+    const tempDir = path.join(os.tmpdir(), 'claudito-mcp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Generate a unique filename for this project/session
+    const timestamp = Date.now();
+    const configFileName = `mcp-${projectId}-${timestamp}.json`;
+    const configPath = path.join(tempDir, configFileName);
+
+    // Write the config file
+    fs.writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2));
+
+    return configPath;
   }
 
   /**
@@ -173,9 +213,9 @@ export class MessageBuilder {
    */
   static extractSessionId(message: string): string | null {
     const patterns = [
-      /Session ID: ([a-f0-9-]+)/i,
-      /Resuming session: ([a-f0-9-]+)/i,
-      /Created new session: ([a-f0-9-]+)/i,
+      /Session ID: ([a-zA-Z0-9-]+)/i,
+      /Resuming session: ([a-zA-Z0-9-]+)/i,
+      /Created new session: ([a-zA-Z0-9-]+)/i,
     ];
 
     for (const pattern of patterns) {

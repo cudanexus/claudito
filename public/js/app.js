@@ -28,9 +28,18 @@
   var FolderBrowserModule = window.FolderBrowserModule;
   var PromptTemplatesModule = window.PromptTemplatesModule;
   var ClaudeCommandsModule = window.ClaudeCommandsModule;
+  var ResourceMonitor = window.ResourceMonitor;
+  var WebSocketModule = window.WebSocketModule;
 
   // Alias for backward compatibility within this file
   var api = ApiClient;
+
+  // Generate unique client ID for this session
+  var clientId = sessionStorage.getItem('claudito-client-id');
+  if (!clientId) {
+    clientId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    sessionStorage.setItem('claudito-client-id', clientId);
+  }
 
   // Application state
   const state = {
@@ -41,6 +50,8 @@
       currentPath: null
     },
     websocket: null,
+    wsConnected: false, // Track WebSocket connection state
+    clientId: clientId, // Add clientId for multi-client debugging
     resourceStatus: {
       runningCount: 0,
       maxConcurrent: 3,
@@ -80,6 +91,7 @@
     pendingImages: [], // Array of { id, dataUrl, mimeType, size } for images to send with message
     currentSessionId: null, // Claude session ID for session resumption
     currentPlanFile: null, // Path to current plan file from ExitPlanMode
+    allClientResources: {}, // Resources from all clients { clientId: { resources: [], stats: {} } }
     // WebSocket reconnection state
     wsReconnect: {
       attempts: 0,
@@ -145,7 +157,9 @@
     shellEnabled: true, // Whether shell tab is available (disabled when server bound to 0.0.0.0)
     projectInputs: {}, // Per-project input text: { projectId: 'input text' }
     currentRalphLoopId: null, // Currently running Ralph Loop task ID
-    isRalphLoopRunning: false // Whether Ralph Loop is currently active
+    isRalphLoopRunning: false, // Whether Ralph Loop is currently active
+    hasUnsavedMcpChanges: false, // Track if MCP server changes haven't been saved
+    settings: null // Global settings object
   };
 
   // Local storage keys - use module's KEYS
@@ -163,8 +177,31 @@
   // API functions - provided by ApiClient module (aliased as 'api' above)
 
   // Frontend error logging to backend
-  function logFrontendError(message, source, line, column, errorObj) {
-    ApiClient.logFrontendError(message, source, line, column, errorObj, state.selectedProjectId);
+  function logFrontendError(message, source, line, column, errorObj, errorType) {
+    // Add client ID and error type to the error data
+    ApiClient.logFrontendError(message, source, line, column, errorObj, state.selectedProjectId, {
+      clientId: state.clientId,
+      errorType: errorType || 'runtime'
+    });
+
+    // Also broadcast via WebSocket for multi-client debugging
+    if (state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+      state.websocket.send(JSON.stringify({
+        type: 'frontend_error',
+        data: {
+          clientId: state.clientId,
+          message: message,
+          source: source,
+          line: line,
+          column: column,
+          stack: errorObj && errorObj.stack ? errorObj.stack : null,
+          userAgent: navigator.userAgent,
+          timestamp: new Date().toISOString(),
+          errorType: errorType || 'runtime',
+          projectId: state.selectedProjectId
+        }
+      }));
+    }
   }
 
   // Set up global error handlers
@@ -393,6 +430,51 @@
     });
   }
 
+  // Check for unsaved MCP changes and show confirmation dialog
+  function checkUnsavedMcpChanges() {
+    // If no unsaved changes, allow close immediately
+    if (!state.hasUnsavedMcpChanges) {
+      return Promise.resolve(true);
+    }
+
+    // Show confirmation dialog
+    return new Promise(function(resolve) {
+      $('#modal-unsaved-changes').removeClass('hidden');
+
+      var cleanup = function() {
+        $('#btn-unsaved-save').off('click.unsaved');
+        $('#btn-unsaved-discard').off('click.unsaved');
+        $('#btn-unsaved-cancel').off('click.unsaved');
+        $('#modal-unsaved-changes').addClass('hidden');
+      };
+
+      // Save & Close - save settings then close
+      $('#btn-unsaved-save').on('click.unsaved', function() {
+        cleanup();
+        handleSaveSettings($('#form-settings'));
+        resolve(true);
+      });
+
+      // Discard - reset state and close
+      $('#btn-unsaved-discard').on('click.unsaved', function() {
+        cleanup();
+        state.hasUnsavedMcpChanges = false;
+        $('#mcp-unsaved-warning').addClass('hidden');
+        // Reload MCP settings to discard in-memory changes
+        if (state.settings && state.settings.mcp) {
+          McpSettingsModule.loadSettings(state.settings.mcp);
+        }
+        resolve(true);
+      });
+
+      // Cancel - stay in modal
+      $('#btn-unsaved-cancel').on('click.unsaved', function() {
+        cleanup();
+        resolve(false);
+      });
+    });
+  }
+
   // ============================================================
   // Search functionality
   // ============================================================
@@ -420,6 +502,20 @@
   }
 
   function closeAllModals() {
+    // Check if settings modal is open and has unsaved MCP changes
+    if (!$('#modal-settings').hasClass('hidden') && state.hasUnsavedMcpChanges) {
+      checkUnsavedMcpChanges().then(function(shouldClose) {
+        if (shouldClose) {
+          doCloseAllModals();
+        }
+      });
+    } else {
+      doCloseAllModals();
+    }
+  }
+
+  // Extract the actual close logic
+  function doCloseAllModals() {
     $('.modal').addClass('hidden');
 
     // Reset Claude files modal mobile view
@@ -631,12 +727,14 @@
     if (!project) {
       $('#project-detail').addClass('hidden');
       $('#empty-state').removeClass('hidden');
+      $('#btn-project-mcp').addClass('hidden');
       renderProjectOverview();
       return;
     }
 
     $('#empty-state').addClass('hidden');
     $('#project-detail').removeClass('hidden');
+    $('#btn-project-mcp').removeClass('hidden');
 
     $('#project-name').text(project.name);
 
@@ -788,6 +886,7 @@
 
     updateStartStopButtons();
     updateInputArea();
+    updateStopRestartButton(project.id);
   }
 
   // Conversation rendering
@@ -889,6 +988,11 @@
             loadPlanContent($planContainer);
           }
         }
+      }
+
+      // Block input when AskUserQuestion tool is waiting for response
+      if (toolInfo.name === 'AskUserQuestion' && toolInfo.status !== 'completed') {
+        setPromptBlockingState('askuser');
       }
     }
 
@@ -1203,15 +1307,38 @@
     });
 
     $('.modal-close').on('click', function() {
-      closeAllModals();
+      var $modal = $(this).closest('.modal');
+      if ($modal.attr('id') === 'modal-settings' && state.hasUnsavedMcpChanges) {
+        checkUnsavedMcpChanges().then(function(shouldClose) {
+          if (shouldClose) {
+            closeAllModals();
+          }
+        });
+      } else {
+        closeAllModals();
+      }
     });
 
     $('.modal-backdrop').on('click', function() {
-      closeAllModals();
+      var $modal = $(this).parent('.modal');
+      if ($modal.attr('id') === 'modal-settings' && state.hasUnsavedMcpChanges) {
+        checkUnsavedMcpChanges().then(function(shouldClose) {
+          if (shouldClose) {
+            closeAllModals();
+          }
+        });
+      } else {
+        closeAllModals();
+      }
     });
 
     // Tool message click handler - open detail modal
-    $(document).on('click', '.conversation-message.tool-use', function() {
+    $(document).on('click', '.conversation-message.tool-use', function(e) {
+      // Don't open modal if clicking on ask-user-option buttons
+      if ($(e.target).closest('.ask-user-option').length > 0) {
+        return;
+      }
+
       var toolId = $(this).attr('data-tool-id');
       var toolData = ToolRenderer.getToolData(toolId);
 
@@ -1379,6 +1506,12 @@
       if (e.key === 'Escape') {
         if (state.search.isOpen) {
           SearchModule.close();
+        } else if (!$('#modal-settings').hasClass('hidden') && state.hasUnsavedMcpChanges) {
+          checkUnsavedMcpChanges().then(function(shouldClose) {
+            if (shouldClose) {
+              closeAllModals();
+            }
+          });
         } else {
           closeAllModals();
         }
@@ -1558,6 +1691,10 @@
         state.sendWithCtrlEnter = updated.sendWithCtrlEnter !== false;
         state.historyLimit = updated.historyLimit || 25;
         state.settings = updated;
+        state.hasUnsavedMcpChanges = false;
+        $('#mcp-unsaved-warning').addClass('hidden');
+        $('#modal-settings .modal-header').removeClass('has-unsaved');
+        $('#btn-save-settings').removeClass('has-changes');
         updateRunningCount();
         updateInputHint();
         closeAllModals();
@@ -1885,7 +2022,12 @@
       if (state.isRalphLoopRunning) {
         stopRalphLoop();
       } else {
-        stopSelectedAgent();
+        var project = findProjectById(state.selectedProjectId);
+        if (project && project.status === 'running') {
+          stopSelectedAgent();
+        } else {
+          restartSelectedAgent();
+        }
       }
     });
 
@@ -1961,6 +2103,16 @@
         SearchModule.close();
       } else {
         SearchModule.open();
+      }
+    });
+
+    // MCP Servers button
+    $('#btn-project-mcp').on('click', function() {
+      if (state.selectedProjectId) {
+        var project = findProjectById(state.selectedProjectId);
+        if (project) {
+          McpProjectModule.openProjectMcpModal(state.selectedProjectId, project.name);
+        }
       }
     });
 
@@ -2222,6 +2374,94 @@
       $input.focus();
       showToast('Describe what you\'d like to change in the plan', 'info');
     });
+
+    // AskUserQuestion option button handler
+    $(document).on('click', '.ask-user-option', function(e) {
+      e.preventDefault();
+      e.stopPropagation(); // Prevent tool modal from opening
+
+      var $btn = $(this);
+      var toolId = $btn.data('tool-id');
+      var questionIndex = $btn.data('question-index');
+      var optionLabel = $btn.data('option-label');
+
+      // Check if this is part of a multi-question set
+      var $askUserQuestion = $btn.closest('.ask-user-question');
+      var totalQuestions = $askUserQuestion.find('[data-question-index]').length / $askUserQuestion.find('[data-question-index="0"]').length;
+
+      if (totalQuestions > 1) {
+        // Multi-question mode
+        if (!state.multiQuestionState.activeToolId) {
+          state.multiQuestionState.activeToolId = toolId;
+          state.multiQuestionState.totalQuestions = totalQuestions;
+          state.multiQuestionState.isMultiQuestion = true;
+        }
+
+        // Store answer
+        state.multiQuestionState.answers[questionIndex] = optionLabel;
+
+        // Visual feedback - disable all buttons in this question
+        $btn.closest('[data-question-index="' + questionIndex + '"]')
+          .find('.ask-user-option')
+          .prop('disabled', true)
+          .addClass('opacity-50 cursor-not-allowed');
+        $btn.removeClass('opacity-50').addClass('bg-purple-600');
+
+        // Check if all answered
+        if (Object.keys(state.multiQuestionState.answers).length === totalQuestions) {
+          // Format as single combined message
+          var parts = [];
+          for (var i = 0; i < totalQuestions; i++) {
+            if (state.multiQuestionState.answers[i]) {
+              parts.push('Q' + (i + 1) + ': ' + state.multiQuestionState.answers[i]);
+            }
+          }
+          var consolidatedResponse = parts.join(', ');
+          sendQuestionResponse(consolidatedResponse);
+
+          // Clear prompt blocking
+          state.justAnsweredQuestion = true;
+          setPromptBlockingState(null);
+          setTimeout(function() {
+            state.justAnsweredQuestion = false;
+          }, 100);
+
+          // Mark the tool as completed
+          ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + consolidatedResponse);
+
+          // Reset state
+          state.multiQuestionState = {
+            activeToolId: null,
+            totalQuestions: 0,
+            answers: {},
+            isMultiQuestion: false
+          };
+
+          // Remove progress indicator
+          $('#multi-question-progress').remove();
+        } else {
+          // Update progress indicator
+          updateMultiQuestionProgress();
+        }
+      } else {
+        // Single question - existing behavior
+        sendQuestionResponse(optionLabel);
+
+        // Clear prompt blocking
+        state.justAnsweredQuestion = true;
+        setPromptBlockingState(null);
+        setTimeout(function() {
+          state.justAnsweredQuestion = false;
+        }, 100);
+
+        // Disable all buttons in this question
+        $btn.closest('.ask-user-question').find('.ask-user-option').prop('disabled', true).addClass('opacity-50 cursor-not-allowed');
+        $btn.addClass('bg-purple-600');
+
+        // Mark the tool as completed
+        ToolRenderer.updateToolStatus(toolId, 'completed', 'User selected: ' + optionLabel);
+      }
+    });
   }
 
   function sendPlanModeResponse(response) {
@@ -2355,6 +2595,23 @@
       .fail(function(xhr) {
         showErrorToast(xhr, 'Failed to send permission response');
       });
+  }
+
+  function updateMultiQuestionProgress() {
+    var answered = Object.keys(state.multiQuestionState.answers).length;
+    var total = state.multiQuestionState.totalQuestions;
+    var message = 'Answered ' + answered + ' of ' + total + ' questions';
+
+    // Add progress message near input field
+    var $progress = $('#multi-question-progress');
+    if ($progress.length === 0) {
+      $progress = $('<div id="multi-question-progress" class="text-xs text-gray-400 mb-2 px-2"></div>');
+      $('#interactive-input-area').prepend($progress);
+    }
+    $progress.text(message);
+
+    // Update placeholder
+    $('#input-message').attr('placeholder', 'Please answer all questions above (' + answered + '/' + total + ')...');
   }
 
   function sendQuestionResponse(response) {
@@ -2770,9 +3027,38 @@
       handleSaveSettings($(this));
     });
 
+    // Cancel button handler for settings modal
+    $('#btn-cancel-settings').on('click', function() {
+      if (state.hasUnsavedMcpChanges) {
+        checkUnsavedMcpChanges().then(function(shouldClose) {
+          if (shouldClose) {
+            closeAllModals();
+          }
+        });
+      } else {
+        closeAllModals();
+      }
+    });
+
     setupTextareaKeyHandlers();
     setupCharacterCountHandlers();
     setupAutoResizeTextareas();
+
+    // MCP servers changed handler
+    $(document).on('mcp-servers-changed', function() {
+      state.hasUnsavedMcpChanges = true;
+      $('#mcp-unsaved-warning').removeClass('hidden');
+      $('#modal-settings .modal-header').addClass('has-unsaved');
+      $('#btn-save-settings').addClass('has-changes');
+    });
+
+    // MCP enabled checkbox handler
+    $('#input-mcp-enabled').on('change', function() {
+      state.hasUnsavedMcpChanges = true;
+      $('#mcp-unsaved-warning').removeClass('hidden');
+      $('#modal-settings .modal-header').addClass('has-unsaved');
+      $('#btn-save-settings').addClass('has-changes');
+    });
 
     // Folder browser button handlers are in FolderBrowserModule.setupHandlers()
 
@@ -2824,6 +3110,9 @@
     state.pendingPermissionMode = null; // Clear pending mode on project change
     setPromptBlockingState(null); // Clear any prompt blocking on project change
     var project = findProjectById(projectId);
+
+    // Store current project with full data including path
+    state.currentProject = project;
 
     // Save selected project to localStorage
     saveToLocalStorage(LOCAL_STORAGE_KEYS.SELECTED_PROJECT, projectId);
@@ -3276,6 +3565,63 @@
           $('#btn-stop-agent').prop('disabled', false);
         }
       });
+  }
+
+  function restartSelectedAgent() {
+    if (!state.selectedProjectId) return;
+
+    var projectId = state.selectedProjectId;
+    var sessionId = state.currentSessionId;
+    var permissionMode = state.permissionMode;
+
+    showToast('Restarting agent...', 'info');
+    $('#btn-stop-agent').prop('disabled', true);
+
+    // Helper function to start agent with delay
+    function startAgentWithDelay() {
+      api.startInteractiveAgent(projectId, '', [], sessionId, permissionMode)
+        .done(function(response) {
+          state.currentAgentMode = 'interactive';
+          updateProjectStatusById(projectId, 'running');
+          startAgentStatusPolling(projectId);
+
+          if (response && response.sessionId) {
+            state.currentSessionId = response.sessionId;
+          }
+
+          appendMessage(projectId, {
+            type: 'system',
+            content: 'Agent restarted',
+            timestamp: new Date().toISOString()
+          });
+
+          showToast('Agent restarted', 'success');
+        })
+        .fail(function(xhr) {
+          showErrorToast(xhr, 'Failed to restart agent');
+          updateProjectStatusById(projectId, 'stopped');
+        })
+        .always(function() {
+          $('#btn-stop-agent').prop('disabled', false);
+        });
+    }
+
+    // If already stopped, just start
+    var project = findProjectById(projectId);
+    if (project && project.status === 'stopped') {
+      startAgentWithDelay();
+    } else {
+      // Stop first, then start
+      api.stopAgent(projectId)
+        .done(function() {
+          updateProjectStatusById(projectId, 'stopped');
+          setTimeout(startAgentWithDelay, 1000);
+        })
+        .fail(function(xhr) {
+          showErrorToast(xhr, 'Failed to stop agent for restart');
+          $('#btn-stop-agent').prop('disabled', false);
+        });
+    }
   }
 
   function cancelAgentOperation() {
@@ -3986,7 +4332,34 @@
 
       if (state.selectedProjectId === projectId) {
         updateProjectStatus(project);
+        updateStopRestartButton(projectId);
       }
+    }
+  }
+
+  function updateStopRestartButton(projectId) {
+    var project = findProjectById(projectId);
+    var $button = $('#btn-stop-agent');
+
+    if (project && project.status === 'running') {
+      // Show Stop
+      $button.html(
+        '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>' +
+        '</svg>' +
+        'Stop'
+      );
+      $button.removeClass('bg-green-600 hover:bg-green-700').addClass('bg-red-600 hover:bg-red-700');
+    } else {
+      // Show Restart
+      $button.html(
+        '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>' +
+        '</svg>' +
+        'Restart'
+      );
+      $button.removeClass('bg-red-600 hover:bg-red-700').addClass('bg-green-600 hover:bg-green-700');
     }
   }
 
@@ -3996,6 +4369,14 @@
       .done(function(projects) {
         state.projects = projects || [];
         renderProjectList();
+
+        // Update current project if selected
+        if (state.selectedProjectId) {
+          var currentProject = findProjectById(state.selectedProjectId);
+          if (currentProject) {
+            state.currentProject = currentProject;
+          }
+        }
 
         // Restore saved project selection
         var savedProjectId = loadFromLocalStorage(LOCAL_STORAGE_KEYS.SELECTED_PROJECT, null);
@@ -4030,6 +4411,7 @@
 
     state.websocket.onopen = function() {
       console.log('WebSocket connected');
+      state.wsConnected = true; // Track connection state
       state.wsReconnect.attempts = 0;
       updateConnectionStatus('connected');
 
@@ -4040,11 +4422,13 @@
     };
 
     state.websocket.onmessage = function(event) {
-      handleWebSocketMessage(JSON.parse(event.data));
+      var message = JSON.parse(event.data);
+      handleWebSocketMessage(message);
     };
 
     state.websocket.onclose = function(event) {
       console.log('WebSocket disconnected (code: ' + event.code + ')');
+      state.wsConnected = false; // Track connection state
       updateConnectionStatus('disconnected');
       scheduleReconnect();
     };
@@ -4160,6 +4544,15 @@
           RalphLoopModule.handleWebSocketMessage(message.type, message.data);
         }
         break;
+      case 'resource_event':
+        handleResourceEvent(message.data);
+        break;
+      case 'frontend_error':
+        // Pass frontend errors to DebugModal if it has a handler
+        if (DebugModal && DebugModal.handleFrontendError) {
+          DebugModal.handleFrontendError(message.data);
+        }
+        break;
     }
   }
 
@@ -4212,6 +4605,23 @@
       }
     } else {
       $waitingBadge.remove();
+    }
+  }
+
+  function handleResourceEvent(data) {
+    // Store resource data from all clients
+    if (data && data.clientId) {
+      state.allClientResources[data.clientId] = {
+        resource: data.resource,
+        stats: data.stats,
+        action: data.action,
+        lastUpdate: Date.now()
+      };
+
+      // Update debug modal if it's open and showing resources tab
+      if ($('#debug-modal').is(':visible') && $('#debug-tab-resources').is(':visible')) {
+        DebugModal.renderResourcesTab();
+      }
     }
   }
 
@@ -4553,6 +4963,7 @@
     api.getSettings()
       .done(function(settings) {
         state.settings = settings;
+        state.hasUnsavedMcpChanges = false; // Reset on initial load
         state.sendWithCtrlEnter = settings.sendWithCtrlEnter !== false;
         updateInputHint();
       });
@@ -4612,6 +5023,51 @@
     // Initialize ApiClient (sets up global 401 redirect handler)
     ApiClient.init();
 
+    // Initialize ResourceMonitor to track asset loading failures
+    if (ResourceMonitor) {
+      ResourceMonitor.init({
+        onError: function(error) {
+          // Log resource errors to backend
+          logFrontendError(error.message, error.url, null, null, error, error.type);
+        },
+        onResource: function(event) {
+          // Send all resource events to backend for global monitoring
+          if (state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+            state.websocket.send(JSON.stringify({
+              type: 'resource_event',
+              data: {
+                type: event.type,
+                url: event.url,
+                status: event.status,
+                duration: event.duration,
+                error: event.error,
+                method: event.method,
+                statusCode: event.statusCode,
+                timestamp: event.timestamp || new Date().toISOString(),
+                clientId: state.clientId,
+                userAgent: navigator.userAgent,
+                hostname: window.location.hostname
+              }
+            }));
+          }
+        }
+      });
+
+      // Start periodic resource stats broadcasting
+      ResourceMonitor.startPeriodicBroadcast(function(stats) {
+        if (state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+          state.websocket.send(JSON.stringify({
+            type: 'resource_event',
+            data: {
+              clientId: state.clientId,
+              stats: stats,
+              timestamp: new Date().toISOString()
+            }
+          }));
+        }
+      }, 30000); // Broadcast every 30 seconds
+    }
+
     // Initialize FileCache with dependencies
     FileCache.init({
       api: api
@@ -4662,7 +5118,9 @@
       openModal: openModal,
       formatDateTime: formatDateTime,
       formatLogTime: formatLogTime,
-      formatBytes: formatBytes
+      formatBytes: formatBytes,
+      WebSocketModule: WebSocketModule,
+      ResourceMonitor: ResourceMonitor
     });
 
     // Initialize FileBrowser with dependencies
@@ -4788,7 +5246,18 @@
       escapeHtml: escapeHtml,
       showToast: showToast,
       openModal: openModal,
+      closeModal: closeModal,
       closeAllModals: closeAllModals
+    });
+
+    McpProjectModule.init({
+      state: state,
+      api: api,
+      escapeHtml: escapeHtml,
+      showToast: showToast,
+      openModal: openModal,
+      closeAllModals: closeAllModals,
+      appendMessage: appendMessage
     });
 
     ClaudeCommandsModule.init({

@@ -22,6 +22,8 @@ import { RalphLoopService } from '../services/ralph-loop/types';
 import { FileRalphLoopRepository } from '../repositories/ralph-loop';
 import { getDataDirectory, getLogger, getGlobalLogs } from '../utils';
 import { RoadmapGenerator } from '../services';
+import { ProjectWebSocketServer } from '../websocket';
+import { ProjectDiscoveryService, DefaultProjectDiscoveryService } from '../services/project-discovery';
 import packageJson from '../../package.json';
 
 const frontendLogger = getLogger('frontend');
@@ -32,6 +34,8 @@ let sharedShellService: ShellService | null = null;
 let sharedRalphLoopService: RalphLoopService | null = null;
 let sharedConversationRepository: FileConversationRepository | null = null;
 let sharedProjectRepository: FileProjectRepository | null = null;
+let sharedWebSocketServer: ProjectWebSocketServer | null = null;
+let sharedProjectDiscoveryService: ProjectDiscoveryService | null = null;
 
 export interface ApiRouterDependencies {
   agentManager?: AgentManager;
@@ -95,6 +99,8 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
       column?: number;
       projectId?: string;
       userAgent?: string;
+      clientId?: string;
+      errorType?: string;
     };
 
     const loggerWithProject = body.projectId
@@ -109,6 +115,8 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
       column: body.column,
       userAgent: body.userAgent,
       type: 'frontend',
+      errorType: body.errorType || 'runtime',
+      clientId: body.clientId,
     });
 
     res.json({ success: true });
@@ -156,6 +164,23 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
     res.json({ logs });
   });
 
+  // Get all connected clients
+  router.get('/debug/clients', (_req, res) => {
+    const webSocketServer = getWebSocketServer();
+    const projectId = _req.query['projectId'] as string | undefined;
+
+    if (!webSocketServer) {
+      res.json([]);
+      return;
+    }
+
+    const clients = projectId
+      ? webSocketServer.getConnectedClients(projectId)
+      : webSocketServer.getConnectedClients();
+
+    res.json(clients);
+  });
+
   // Filesystem routes
   const filesystemService = createFilesystemService();
   router.use('/fs', createFilesystemRouter(filesystemService));
@@ -168,8 +193,8 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
         agentManager.setMaxConcurrentAgents(event.maxConcurrentAgents);
       }
 
-      if (event.appendSystemPromptChanged) {
-        // Restart all running agents to apply the new system prompt
+      if (event.appendSystemPromptChanged || event.mcpChanged) {
+        // Restart all running agents to apply the new system prompt or MCP changes
         agentManager.restartAllRunningAgents().catch((error) => {
           console.error('Failed to restart agents after settings change:', error);
         });
@@ -199,6 +224,7 @@ export function createApiRouter(deps: ApiRouterDependencies = {}): Router {
     shellService,
     shellEnabled,
     ralphLoopService: getOrCreateRalphLoopService(projectRepository, settingsRepository),
+    projectDiscoveryService: getOrCreateProjectDiscoveryService(projectRepository),
   }));
 
   return router;
@@ -281,4 +307,29 @@ export function getConversationRepository(): FileConversationRepository | null {
 
 export function getProjectRepository(): FileProjectRepository | null {
   return sharedProjectRepository;
+}
+
+export function setWebSocketServer(server: ProjectWebSocketServer): void {
+  sharedWebSocketServer = server;
+}
+
+export function getWebSocketServer(): ProjectWebSocketServer | null {
+  return sharedWebSocketServer;
+}
+
+export function getProcessTracker(): unknown {
+  // Process tracker is part of the agent manager
+  return sharedAgentManager ? (sharedAgentManager as { processTracker?: unknown }).processTracker : null;
+}
+
+function getOrCreateProjectDiscoveryService(projectRepository: FileProjectRepository): ProjectDiscoveryService {
+  if (!sharedProjectDiscoveryService) {
+    const logger = getLogger('project-discovery');
+    sharedProjectDiscoveryService = new DefaultProjectDiscoveryService(projectRepository, logger);
+  }
+  return sharedProjectDiscoveryService;
+}
+
+export function getProjectDiscoveryService(): ProjectDiscoveryService | null {
+  return sharedProjectDiscoveryService;
 }

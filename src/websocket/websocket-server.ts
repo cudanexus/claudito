@@ -4,8 +4,23 @@ import { AgentManager, AgentMessage, QueuedProject, AgentResourceStatus, Context
 import { RoadmapGenerator, RoadmapMessage, AuthService, ShellService } from '../services';
 import { RalphLoopService, RalphLoopStatus, IterationSummary, ReviewerFeedback, RalphLoopFinalStatus } from '../services/ralph-loop/types';
 import { ConversationRepository, ProjectRepository } from '../repositories';
-import { getLogger, Logger } from '../utils/logger';
+import { getLogger, Logger, getLogStore } from '../utils/logger';
 import { parseCookie, COOKIE_NAME } from '../middleware/auth-middleware';
+import { ResourceStats, ResourceEventData, ResourceStatsBroadcast } from './types';
+
+export interface ConnectedClient {
+  clientId: string;
+  projectId?: string;
+  userAgent?: string;
+  connectedAt: string;
+  lastResourceUpdate?: string;
+  resourceStats?: ResourceStats;
+}
+
+export interface ClientRegistry {
+  clients: Map<string, ConnectedClient>;
+  projectClients: Map<string, Set<string>>;
+}
 
 export interface ShellOutputData {
   sessionId: string;
@@ -70,6 +85,19 @@ export interface RalphLoopErrorData {
   error: string;
 }
 
+export interface FrontendErrorData {
+  timestamp: string;
+  message: string;
+  clientId?: string;
+  errorType: string;
+  url?: string;
+  projectId?: string;
+  userAgent?: string;
+  stack?: string;
+  line?: number;
+  column?: number;
+}
+
 
 export interface AgentMessageWithContext extends AgentMessage {
   contextUsage?: ContextUsage;
@@ -95,6 +123,8 @@ export type WebSocketMessageData =
   | RalphLoopWorkerCompleteData
   | RalphLoopReviewerCompleteData
   | RalphLoopErrorData
+  | FrontendErrorData
+  | ResourceEventData
   | string; // Covers 'connected' messages and simple loop events
 
 export interface SessionRecoveryData {
@@ -123,6 +153,8 @@ export interface WebSocketMessage {
     | 'ralph_loop_complete'
     | 'ralph_loop_error'
     | 'ralph_loop_tool_use'
+    | 'frontend_error'
+    | 'resource_event'
 ;
   projectId?: string;
   data?: WebSocketMessageData | SessionRecoveryData;
@@ -133,6 +165,8 @@ export interface ProjectWebSocketServer {
   broadcast(message: WebSocketMessage): void;
   broadcastToProject(projectId: string, message: WebSocketMessage): void;
   close(): void;
+  getConnectedClients(projectId?: string): ConnectedClient[];
+  getAllConnectedClients(): Map<string, ConnectedClient>;
 }
 
 export interface WebSocketServerDependencies {
@@ -156,6 +190,9 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
   private readonly projectRepository?: ProjectRepository;
   private readonly projectSubscriptions: Map<string, Set<WebSocket>> = new Map();
   private readonly logger: Logger;
+  // Client registry for tracking connected clients
+  private readonly connectedClients: Map<string, ConnectedClient> = new Map();
+  private readonly clientWebSockets: Map<WebSocket, string> = new Map();
 
   constructor(deps: WebSocketServerDependencies) {
     this.agentManager = deps.agentManager;
@@ -170,6 +207,7 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     this.setupRoadmapListeners();
     this.setupShellListeners();
     this.setupRalphLoopListeners();
+    this.setupLoggerListeners();
   }
 
   initialize(httpServer: Server): void {
@@ -249,6 +287,8 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     this.wss.close();
     this.wss = null;
     this.projectSubscriptions.clear();
+    this.connectedClients.clear();
+    this.clientWebSockets.clear();
   }
 
   private handleConnection(ws: WebSocket): void {
@@ -269,13 +309,41 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
 
   private processClientMessage(ws: WebSocket, message: ClientMessage): void {
     switch (message.type) {
+      case 'register':
+        if (message.clientId) {
+          this.registerClient(ws, message.clientId, message.userAgent);
+        }
+        break;
       case 'subscribe':
-        this.subscribeToProject(ws, message.projectId);
+        if (message.projectId) {
+          this.subscribeToProject(ws, message.projectId);
+        }
         break;
       case 'unsubscribe':
-        this.unsubscribeFromProject(ws, message.projectId);
+        if (message.projectId) {
+          this.unsubscribeFromProject(ws, message.projectId);
+        }
+        break;
+      case 'resource_event':
+        this.handleResourceEvent(message.data);
         break;
     }
+  }
+
+  private registerClient(ws: WebSocket, clientId: string, userAgent?: string): void {
+    const client: ConnectedClient = {
+      clientId,
+      userAgent,
+      connectedAt: new Date().toISOString(),
+    };
+    this.connectedClients.set(clientId, client);
+    this.clientWebSockets.set(ws, clientId);
+
+    this.logger.debug('Client registered', {
+      clientId,
+      userAgent,
+      totalClients: this.connectedClients.size,
+    });
   }
 
   private subscribeToProject(ws: WebSocket, projectId: string): void {
@@ -283,7 +351,18 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
       this.projectSubscriptions.set(projectId, new Set());
     }
     this.projectSubscriptions.get(projectId)!.add(ws);
+
+    // Update client's project association
+    const clientId = this.clientWebSockets.get(ws);
+    if (clientId) {
+      const client = this.connectedClients.get(clientId);
+      if (client) {
+        client.projectId = projectId;
+      }
+    }
+
     this.logger.withProject(projectId).debug('Client subscribed', {
+      clientId,
       subscribers: this.projectSubscriptions.get(projectId)!.size,
     });
 
@@ -304,10 +383,43 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     }
   }
 
+  private handleResourceEvent(data: ResourceEventData | undefined): void {
+    if (!data) return;
+
+    // Type guard to check if it's a stats broadcast
+    if ('stats' in data && 'clientId' in data) {
+      const broadcastData = data;
+      const client = this.connectedClients.get(broadcastData.clientId);
+      if (client) {
+        client.resourceStats = broadcastData.stats;
+        client.lastResourceUpdate = new Date().toISOString();
+      }
+    }
+
+    // Broadcast resource event to all connected clients
+    this.broadcast({
+      type: 'resource_event',
+      data: data,
+    });
+  }
+
   private handleDisconnect(ws: WebSocket): void {
+    // Remove from project subscriptions
     this.projectSubscriptions.forEach((subscribers) => {
       subscribers.delete(ws);
     });
+
+    // Remove from client registry
+    const clientId = this.clientWebSockets.get(ws);
+    if (clientId) {
+      this.connectedClients.delete(clientId);
+      this.clientWebSockets.delete(ws);
+
+      this.logger.debug('Client disconnected', {
+        clientId,
+        remainingClients: this.connectedClients.size,
+      });
+    }
   }
 
   private sendMessage(ws: WebSocket, message: WebSocketMessage): void {
@@ -569,6 +681,31 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
     });
   }
 
+  private setupLoggerListeners(): void {
+    const logStore = getLogStore();
+
+    // Listen for frontend errors and broadcast them to all clients
+    logStore.on('frontend_error', (logEntry) => {
+      const frontendError: FrontendErrorData = {
+        timestamp: logEntry.timestamp as string,
+        message: logEntry.message as string,
+        clientId: logEntry.context?.clientId as string | undefined,
+        errorType: (logEntry.context?.errorType as string) || 'runtime',
+        url: logEntry.context?.source as string | undefined,
+        projectId: logEntry.projectId as string | undefined,
+        userAgent: logEntry.context?.userAgent as string | undefined,
+        stack: logEntry.context?.stack as string | undefined,
+        line: logEntry.context?.line as number | undefined,
+        column: logEntry.context?.column as number | undefined,
+      };
+
+      this.broadcast({
+        type: 'frontend_error',
+        data: frontendError,
+      });
+    });
+  }
+
   private async saveRalphLoopMessage(
     projectId: string,
     type: string,
@@ -688,9 +825,27 @@ export class DefaultWebSocketServer implements ProjectWebSocketServer {
       });
     }
   }
+
+  getConnectedClients(projectId?: string): ConnectedClient[] {
+    if (!projectId) {
+      return Array.from(this.connectedClients.values());
+    }
+
+    // Filter clients by project
+    return Array.from(this.connectedClients.values()).filter(
+      client => client.projectId === projectId
+    );
+  }
+
+  getAllConnectedClients(): Map<string, ConnectedClient> {
+    return new Map(this.connectedClients);
+  }
 }
 
 interface ClientMessage {
-  type: 'subscribe' | 'unsubscribe';
-  projectId: string;
+  type: 'subscribe' | 'unsubscribe' | 'resource_event' | 'register';
+  projectId?: string;
+  data?: ResourceEventData;
+  clientId?: string;
+  userAgent?: string;
 }

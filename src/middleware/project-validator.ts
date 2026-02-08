@@ -1,18 +1,7 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { ProjectRepository } from '../repositories';
 import { ShellService } from '../services';
 import { NotFoundError, ValidationError, asyncHandler } from '../utils/errors';
-
-// Extend Express Request type to include project
-declare module 'express' {
-  interface Request {
-    project?: {
-      id: string;
-      name: string;
-      path: string;
-    };
-  }
-}
 
 export interface ProjectValidatorDeps {
   projectRepository: ProjectRepository;
@@ -25,7 +14,7 @@ export interface ProjectValidatorDeps {
  * This prevents duplicated project lookup and validation logic
  * across multiple route handlers.
  */
-export function createProjectValidator(deps: ProjectValidatorDeps) {
+export function createProjectValidator(deps: ProjectValidatorDeps): RequestHandler {
   return asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const projectId = req.params['id'];
 
@@ -53,8 +42,8 @@ export function createShellServiceValidator(
   shellService: ShellService | null,
   shellEnabled: boolean,
   shellDisabledMessage = 'Terminal is disabled when binding to all network interfaces (0.0.0.0) for security. Bind to localhost to enable.'
-) {
-  return (req: Request, res: Response, next: NextFunction) => {
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     if (!shellEnabled) {
       res.status(403).json({
         error: shellDisabledMessage,
@@ -77,8 +66,8 @@ export function createShellServiceValidator(
 /**
  * Middleware that validates Ralph Loop service availability.
  */
-export function createRalphLoopValidator(ralphLoopService: unknown) {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function createRalphLoopValidator(ralphLoopService: unknown): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     if (!ralphLoopService) {
       res.status(503).json({
         error: 'Ralph Loop service not available'
@@ -99,7 +88,7 @@ export function createProjectWithShellValidator(
   shellService: ShellService | null,
   shellEnabled: boolean,
   shellDisabledMessage?: string
-) {
+): RequestHandler[] {
   const projectValidator = createProjectValidator(deps);
   const shellValidator = createShellServiceValidator(
     shellService,
@@ -117,7 +106,7 @@ export function createProjectWithShellValidator(
 export function createProjectWithRalphLoopValidator(
   deps: ProjectValidatorDeps,
   ralphLoopService: unknown
-) {
+): RequestHandler[] {
   const projectValidator = createProjectValidator(deps);
   const ralphLoopValidator = createRalphLoopValidator(ralphLoopService);
 

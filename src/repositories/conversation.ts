@@ -2,7 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { AgentMessage, ContextUsage } from '../agents';
 import { MilestoneItemRef } from './project';
-import { generateUUID, getLogger, Logger } from '../utils';
+import { ProjectPathResolver } from './interfaces';
+import {
+  generateUUID,
+  getLogger,
+  Logger,
+  atomicWriteFile,
+  safeJsonStringify,
+  getCurrentTimestamp,
+  generateCacheKey,
+  PendingOperationsTracker,
+  WriteQueueManager
+} from '../utils';
 
 export interface ConversationMetadata {
   contextUsage?: ContextUsage;
@@ -61,12 +72,7 @@ export interface ConversationFileSystem {
 
 const defaultFileSystem: ConversationFileSystem = {
   readFile: (filePath) => fs.promises.readFile(filePath, 'utf-8'),
-  writeFile: async (filePath, data) => {
-    // Atomic write: write to temp file, then rename
-    const tempPath = `${filePath}.tmp`;
-    await fs.promises.writeFile(tempPath, data, 'utf-8');
-    await fs.promises.rename(tempPath, filePath);
-  },
+  writeFile: (filePath, data) => atomicWriteFile(filePath, data),
   exists: async (filePath) => {
     try {
       await fs.promises.access(filePath);
@@ -88,9 +94,7 @@ const defaultFileSystem: ConversationFileSystem = {
   unlink: (filePath) => fs.promises.unlink(filePath),
 };
 
-export interface ProjectPathResolver {
-  getProjectPath(projectId: string): string | null;
-}
+// ProjectPathResolver is now imported from interfaces.ts to avoid duplication
 
 export interface FileConversationRepositoryConfig {
   projectPathResolver: ProjectPathResolver;
@@ -107,9 +111,8 @@ export class FileConversationRepository implements ConversationRepository {
   private readonly fileSystem: ConversationFileSystem;
   private readonly maxMessages: number;
   private readonly cache: Map<string, Conversation> = new Map();
-  private readonly pendingOperations: Set<Promise<unknown>> = new Set();
-  // Per-conversation write queues to prevent race conditions
-  private readonly writeQueues: Map<string, Promise<void>> = new Map();
+  private readonly pendingOperations: PendingOperationsTracker;
+  private readonly writeQueues: WriteQueueManager<string>;
   private readonly logger: Logger;
 
   constructor(config: FileConversationRepositoryConfig) {
@@ -117,25 +120,17 @@ export class FileConversationRepository implements ConversationRepository {
     this.fileSystem = config.fileSystem || defaultFileSystem;
     this.maxMessages = config.maxMessagesPerConversation || 1000;
     this.logger = getLogger('conversation-repository');
+    this.pendingOperations = new PendingOperationsTracker('conversation-repo');
+    this.writeQueues = new WriteQueueManager('conversation-repo');
   }
 
   async flush(): Promise<void> {
-    // Keep flushing until no more pending operations
-    // (operations can spawn other operations)
-    while (this.pendingOperations.size > 0) {
-      await Promise.all(Array.from(this.pendingOperations));
-    }
-
-    // Also wait for all write queues to complete
-    if (this.writeQueues.size > 0) {
-      await Promise.all(Array.from(this.writeQueues.values()));
-    }
+    await this.pendingOperations.flush();
+    await this.writeQueues.flush();
   }
 
   private trackOperation<T>(promise: Promise<T>): Promise<T> {
-    this.pendingOperations.add(promise);
-    void promise.finally(() => this.pendingOperations.delete(promise));
-    return promise;
+    return this.pendingOperations.track(promise);
   }
 
   // Serialize operations on a conversation to prevent race conditions
@@ -145,12 +140,7 @@ export class FileConversationRepository implements ConversationRepository {
     operation: () => Promise<T>
   ): Promise<T> {
     const key = this.getCacheKey(projectId, conversationId);
-    const previousOperation = this.writeQueues.get(key) || Promise.resolve();
-
-    const newOperation = previousOperation.then(operation, operation);
-    this.writeQueues.set(key, newOperation.then(() => {}, () => {}));
-
-    return newOperation;
+    return this.writeQueues.withLock(key, operation);
   }
 
   // Conversations are now stored in {project-root}/.claudito/conversations/
@@ -185,12 +175,12 @@ export class FileConversationRepository implements ConversationRepository {
   }
 
   private getCacheKey(projectId: string, conversationId: string): string {
-    return `${projectId}:${conversationId}`;
+    return generateCacheKey(projectId, conversationId);
   }
 
   async create(projectId: string, itemRef: MilestoneItemRef | null): Promise<Conversation> {
     const id = generateConversationId();
-    const now = new Date().toISOString();
+    const now = getCurrentTimestamp();
 
     const conversation: Conversation = {
       id,
@@ -262,7 +252,7 @@ export class FileConversationRepository implements ConversationRepository {
     }
 
     conversation.label = label;
-    conversation.updatedAt = new Date().toISOString();
+    conversation.updatedAt = getCurrentTimestamp();
     await this.saveConversation(projectId, conversation);
   }
 
@@ -281,7 +271,7 @@ export class FileConversationRepository implements ConversationRepository {
         const filePath = this.getConversationPath(projectId, conversationId);
         this.logger.warn('Conversation not found, creating new one', { projectId, conversationId, filePath });
 
-        const now = new Date().toISOString();
+        const now = getCurrentTimestamp();
         conversation = {
           id: conversationId,
           projectId,
@@ -298,7 +288,7 @@ export class FileConversationRepository implements ConversationRepository {
         conversation.messages.splice(0, conversation.messages.length - this.maxMessages);
       }
 
-      conversation.updatedAt = new Date().toISOString();
+      conversation.updatedAt = getCurrentTimestamp();
       await this.saveConversation(projectId, conversation);
     });
   }
@@ -331,7 +321,7 @@ export class FileConversationRepository implements ConversationRepository {
     }
 
     conversation.messages = [];
-    conversation.updatedAt = new Date().toISOString();
+    conversation.updatedAt = getCurrentTimestamp();
     await this.saveConversation(projectId, conversation);
   }
 
@@ -368,7 +358,7 @@ export class FileConversationRepository implements ConversationRepository {
         const filePath = this.getConversationPath(projectId, conversationId);
         this.logger.warn('Conversation not found for metadata update, creating new one', { projectId, conversationId, filePath });
 
-        const now = new Date().toISOString();
+        const now = getCurrentTimestamp();
         conversation = {
           id: conversationId,
           projectId,
@@ -383,7 +373,7 @@ export class FileConversationRepository implements ConversationRepository {
         ...conversation.metadata,
         ...metadata,
       };
-      conversation.updatedAt = new Date().toISOString();
+      conversation.updatedAt = getCurrentTimestamp();
       await this.saveConversation(projectId, conversation);
     });
   }
@@ -553,6 +543,6 @@ export class FileConversationRepository implements ConversationRepository {
       throw new Error(`Project ${projectId} not found`);
     }
 
-    await this.fileSystem.writeFile(filePath, JSON.stringify(conversation, null, 2));
+    await this.fileSystem.writeFile(filePath, safeJsonStringify(conversation));
   }
 }

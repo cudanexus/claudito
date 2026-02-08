@@ -15,6 +15,7 @@
   var escapeHtml = null;
   var showToast = null;
   var openModal = null;
+  var closeModal = null;
   var closeAllModals = null;
 
   function init(deps) {
@@ -22,6 +23,7 @@
     escapeHtml = deps.escapeHtml;
     showToast = deps.showToast;
     openModal = deps.openModal;
+    closeModal = deps.closeModal;
     closeAllModals = deps.closeAllModals;
 
     setupHandlers();
@@ -75,6 +77,7 @@
     $('#input-mcp-server-description').val(isNew ? '' : (server.description || ''));
     $('#input-mcp-server-type').val(isNew ? 'stdio' : server.type);
     $('#input-mcp-server-enabled').prop('checked', isNew ? true : server.enabled);
+    $('#input-mcp-server-autoapprove').prop('checked', isNew ? true : (server.autoApproveTools !== false));
 
     // Type-specific fields
     if (server) {
@@ -128,6 +131,7 @@
     var description = $('#input-mcp-server-description').val().trim();
     var type = $('#input-mcp-server-type').val();
     var enabled = $('#input-mcp-server-enabled').is(':checked');
+    var autoApproveTools = $('#input-mcp-server-autoapprove').is(':checked');
 
     if (!name) {
       showToast('Server name is required', 'error');
@@ -138,7 +142,8 @@
       id: id,
       name: name,
       type: type,
-      enabled: enabled
+      enabled: enabled,
+      autoApproveTools: autoApproveTools
     };
 
     if (description) {
@@ -203,9 +208,12 @@
     }
     state.settings.mcp.servers = servers;
 
-    closeAllModals();
+    closeModal('modal-mcp-server-editor');
     renderMcpServers();
-    showToast('MCP server saved', 'success');
+    showToast('MCP server saved - Remember to save settings!', 'warning');
+
+    // Emit change event
+    $(document).trigger('mcp-servers-changed');
   }
 
   function deleteServer(serverId) {
@@ -218,7 +226,10 @@
 
     state.settings.mcp.servers = servers.filter(function(s) { return s.id !== serverId; });
     renderMcpServers();
-    showToast('MCP server deleted', 'success');
+    showToast('MCP server deleted - Remember to save settings!', 'warning');
+
+    // Emit change event
+    $(document).trigger('mcp-servers-changed');
   }
 
   function generateId() {
@@ -262,8 +273,13 @@
     });
   }
 
+  function loadSettings() {
+    renderMcpServers();
+  }
+
   return {
     init: init,
-    renderMcpServers: renderMcpServers
+    renderMcpServers: renderMcpServers,
+    loadSettings: loadSettings
   };
 }));

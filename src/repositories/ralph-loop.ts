@@ -7,6 +7,7 @@ import {
   IterationSummary,
   ReviewerFeedback,
 } from '../services/ralph-loop/types';
+import { ProjectPathResolver } from './interfaces';
 
 /**
  * File system interface for Ralph Loop persistence
@@ -50,12 +51,7 @@ const defaultFileSystem: RalphLoopFileSystem = {
   rmdir: (dirPath) => fs.promises.rm(dirPath, { recursive: true, force: true }),
 };
 
-/**
- * Interface for resolving project paths
- */
-export interface ProjectPathResolver {
-  getProjectPath(projectId: string): string | null;
-}
+// ProjectPathResolver is now imported from interfaces.ts to avoid duplication
 
 export interface FileRalphLoopRepositoryConfig {
   projectPathResolver: ProjectPathResolver;

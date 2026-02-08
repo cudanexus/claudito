@@ -99,12 +99,12 @@ describe('Ralph Loop Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Task description is required');
+      expect(response.body.error).toBe('taskDescription: Invalid input: expected string, received undefined');
     });
 
     it('should return 404 when project not found', async () => {
       const response = await request(app)
-        .post('/api/projects/nonexistent/ralph-loop/start')
+        .post('/api/projects/00000000-0000-0000-0000-000000000000/ralph-loop/start')
         .send({
           taskDescription: 'Test',
         });
@@ -159,7 +159,7 @@ describe('Ralph Loop Routes', () => {
 
     it('should return 404 when project not found', async () => {
       const response = await request(app)
-        .get('/api/projects/nonexistent/ralph-loop');
+        .get('/api/projects/00000000-0000-0000-0000-000000000000/ralph-loop');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Project not found');
@@ -200,7 +200,7 @@ describe('Ralph Loop Routes', () => {
       mockRalphLoopService.getState.mockResolvedValue(null);
 
       const response = await request(app)
-        .get(`/api/projects/${sampleProject.id}/ralph-loop/nonexistent`);
+        .get(`/api/projects/${sampleProject.id}/ralph-loop/nonexistent-task`);
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Ralph Loop not found');
@@ -208,7 +208,7 @@ describe('Ralph Loop Routes', () => {
 
     it('should return 404 when project not found', async () => {
       const response = await request(app)
-        .get('/api/projects/nonexistent/ralph-loop/task-123');
+        .get('/api/projects/00000000-0000-0000-0000-000000000000/ralph-loop/task-123');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Project not found');
@@ -243,7 +243,7 @@ describe('Ralph Loop Routes', () => {
 
     it('should return 404 when project not found', async () => {
       const response = await request(app)
-        .post('/api/projects/nonexistent/ralph-loop/task-123/stop');
+        .post('/api/projects/00000000-0000-0000-0000-000000000000/ralph-loop/task-123/stop');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Project not found');
@@ -389,16 +389,16 @@ describe('Ralph Loop Routes', () => {
       mockRalphLoopService.delete.mockResolvedValue(false);
 
       const response = await request(app)
-        .delete(`/api/projects/${sampleProject.id}/ralph-loop/nonexistent`);
+        .delete(`/api/projects/${sampleProject.id}/ralph-loop/nonexistent-task`);
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Ralph Loop not found');
-      expect(mockRalphLoopService.delete).toHaveBeenCalledWith(sampleProject.id, 'nonexistent');
+      expect(mockRalphLoopService.delete).toHaveBeenCalledWith(sampleProject.id, 'nonexistent-task');
     });
 
     it('should return 404 when project not found', async () => {
       const response = await request(app)
-        .delete('/api/projects/nonexistent/ralph-loop/task-123');
+        .delete('/api/projects/00000000-0000-0000-0000-000000000000/ralph-loop/task-123');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Project not found');

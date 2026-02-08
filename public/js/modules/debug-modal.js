@@ -13,11 +13,14 @@
 
   // Dependencies injected via init()
   var state, api, escapeHtml, showToast, showConfirm, openModal;
-  var formatDateTime, formatLogTime, formatBytes;
+  var formatDateTime, formatLogTime, formatBytes, ResourceMonitor;
 
   // Full-screen log viewer state
   var fullScreenLogData = null;
   var currentLogsData = { allLogs: [], ioLogs: [] };
+
+  // Storage for frontend error logs received via WebSocket
+  var debugData = { globalLogs: [] };
 
   /**
    * Format a value for display, prettifying JSON strings
@@ -78,6 +81,12 @@
     formatDateTime = deps.formatDateTime;
     formatLogTime = deps.formatLogTime;
     formatBytes = deps.formatBytes;
+    ResourceMonitor = deps.ResourceMonitor;
+
+    // Set up WebSocket listener for frontend errors if available
+    if (deps.WebSocketModule) {
+      deps.WebSocketModule.onMessage('frontend_error', handleFrontendError);
+    }
   }
 
   function open() {
@@ -114,6 +123,53 @@
   function closeLogFullScreen() {
     fullScreenLogData = null;
     $('#debug-log-fullscreen').addClass('hidden');
+  }
+
+  /**
+   * Handle incoming frontend error from WebSocket
+   */
+  function handleFrontendError(errorData) {
+    // Convert WebSocket error data to log entry format
+    var logEntry = {
+      level: 'error',
+      message: 'Frontend error',
+      timestamp: errorData.timestamp,
+      context: {
+        message: errorData.message,
+        type: 'frontend',
+        errorType: errorData.errorType,
+        clientId: errorData.clientId,
+        source: errorData.url,
+        userAgent: errorData.userAgent,
+        stack: errorData.stack,
+        line: errorData.line,
+        column: errorData.column
+      },
+      projectId: errorData.projectId
+    };
+
+    // Add to global logs cache
+    if (!debugData.globalLogs) {
+      debugData.globalLogs = [];
+    }
+    debugData.globalLogs.unshift(logEntry);
+
+    // Limit to 200 entries to prevent memory issues
+    if (debugData.globalLogs.length > 200) {
+      debugData.globalLogs.pop();
+    }
+
+    // If debug modal is open and on logs tab, update the display
+    if (state.debugPanelOpen && $('#debug-tab-logs').is(':visible')) {
+      renderLogsTab();
+    }
+
+    // Add visual indicator for new error
+    var $indicator = $('#debug-error-indicator');
+    if ($indicator.length === 0) {
+      $indicator = $('<span id="debug-error-indicator" class="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>');
+      $('#btn-open-debug').append($indicator);
+    }
   }
 
   /**
@@ -231,6 +287,44 @@
     }
   }
 
+  /**
+   * Aggregate resource stats from all clients
+   */
+  function aggregateAllClientStats(currentStats, allClientResources) {
+    var aggregated = {
+      total: 0,
+      loaded: 0,
+      failed: 0,
+      pending: 0,
+      resources: [],
+      runtime: 0,
+      clientInfo: null
+    };
+
+    // Add current client stats
+    if (currentStats) {
+      aggregated.total += currentStats.total;
+      aggregated.loaded += currentStats.loaded;
+      aggregated.failed += currentStats.failed;
+      aggregated.pending += currentStats.pending;
+      aggregated.resources = aggregated.resources.concat(currentStats.resources || []);
+    }
+
+    // Add remote client stats
+    Object.keys(allClientResources).forEach(function(clientId) {
+      var clientData = allClientResources[clientId];
+      if (clientData && clientData.stats) {
+        aggregated.total += clientData.stats.total || 0;
+        aggregated.loaded += clientData.stats.loaded || 0;
+        aggregated.failed += clientData.stats.failed || 0;
+        aggregated.pending += clientData.stats.pending || 0;
+        aggregated.resources = aggregated.resources.concat(clientData.stats.resources || []);
+      }
+    });
+
+    return aggregated;
+  }
+
   function refresh() {
     if (!state.debugPanelOpen) return;
 
@@ -282,6 +376,7 @@
     renderCommandsTab(data);
     renderLogsTab(data);
     renderAllProcessesTab(data);
+    renderResourcesTab();
   }
 
   function renderClaudeIOTab(data) {
@@ -415,6 +510,7 @@
 
     html += renderLoopStateSection(data);
     html += renderMemorySection(data);
+    html += renderConnectedClientsSection(data);
 
     $('#debug-process-content').html(html);
     updateBrowserMemory();
@@ -528,6 +624,76 @@
     return html;
   }
 
+  function renderConnectedClientsSection(data) {
+    var html = '<div class="bg-gray-800 rounded-lg p-4 mt-4">';
+    html += '<h4 class="text-gray-300 font-semibold mb-3 flex items-center gap-2">';
+    html += '<svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">';
+    html += '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>';
+    html += '</svg>Connected Clients</h4>';
+
+    if (data.connectedClients && data.connectedClients.length > 0) {
+      html += '<div class="space-y-3">';
+
+      data.connectedClients.forEach(function(client) {
+        var isCurrentClient = client.clientId === state.clientId;
+        var clientBg = isCurrentClient ? 'bg-blue-900/20 border-blue-600' : 'bg-gray-900';
+
+        html += '<div class="' + clientBg + ' rounded p-3 border">';
+        html += '<div class="flex items-start justify-between">';
+        html += '<div class="flex-1">';
+
+        // Client header
+        html += '<div class="flex items-center gap-2 mb-2">';
+        html += '<span class="w-2 h-2 bg-green-500 rounded-full"></span>';
+        if (isCurrentClient) {
+          html += '<span class="text-blue-400 font-medium text-sm">This Client</span>';
+        } else {
+          html += '<span class="text-purple-400 font-medium text-sm">Client ' + escapeHtml(client.clientId.substring(0, 8)) + '</span>';
+        }
+        html += '<span class="text-gray-500 text-xs">Connected ' + formatDateTime(client.connectedAt) + '</span>';
+        html += '</div>';
+
+        // Client details
+        html += '<div class="grid grid-cols-2 gap-3 text-xs">';
+
+        html += '<div>';
+        html += '<span class="text-gray-500">User Agent:</span>';
+        html += '<div class="text-gray-300 truncate" title="' + escapeHtml(client.userAgent || 'Unknown') + '">' + escapeHtml((client.userAgent || 'Unknown').substring(0, 50)) + '...</div>';
+        html += '</div>';
+
+        if (client.lastResourceUpdate) {
+          html += '<div>';
+          html += '<span class="text-gray-500">Last Resource Update:</span>';
+          html += '<div class="text-gray-300">' + formatDateTime(client.lastResourceUpdate) + '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+
+        // Resource stats summary if available
+        if (client.resourceStats) {
+          html += '<div class="mt-2 pt-2 border-t border-gray-700 text-xs">';
+          html += '<div class="grid grid-cols-3 gap-2">';
+          html += '<div><span class="text-gray-500">Total:</span> <span class="text-gray-300">' + (client.resourceStats.total || 0) + '</span></div>';
+          html += '<div><span class="text-gray-500">Loaded:</span> <span class="text-green-400">' + (client.resourceStats.loaded || 0) + '</span></div>';
+          html += '<div><span class="text-gray-500">Failed:</span> <span class="text-red-400">' + (client.resourceStats.failed || 0) + '</span></div>';
+          html += '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+        html += '</div>';
+      });
+
+      html += '</div>';
+    } else {
+      html += '<div class="text-gray-500 text-center py-4">No connected clients</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
   function updateBrowserMemory() {
     var container = $('#debug-browser-memory');
 
@@ -601,8 +767,62 @@
     // Store for full-screen viewer access
     currentLogsData.allLogs = allLogs;
 
+    // Get unique client IDs from frontend logs
+    var clientIds = {};
+    allLogs.forEach(function(log) {
+      if (log.context && log.context.clientId) {
+        clientIds[log.context.clientId] = true;
+      }
+    });
+
+    // Get currently selected client filter (preserve selection between renders)
+    var selectedClientFilter = 'all';
+    try {
+      var filterElement = $('#log-client-filter');
+      if (filterElement.length && filterElement.val) {
+        selectedClientFilter = filterElement.val() || 'all';
+      }
+    } catch (e) {
+      // jQuery val() might not be available in tests
+    }
+
+    // Add client filter dropdown if there are multiple clients
+    if (Object.keys(clientIds).length > 1 || (state && state.allClientResources && Object.keys(state.allClientResources).length > 0)) {
+      html += '<div class="mb-3 flex items-center gap-2">';
+      html += '<label class="text-sm text-gray-400">Show Logs From:</label>';
+      html += '<select id="log-client-filter" class="bg-gray-700 text-gray-300 px-2 py-1 rounded text-sm border border-gray-600">';
+      html += '<option value="all"' + (selectedClientFilter === 'all' ? ' selected' : '') + '>All Clients</option>';
+      html += '<option value="current"' + (selectedClientFilter === 'current' ? ' selected' : '') + '>Current Client Only</option>';
+      html += '<option value="server"' + (selectedClientFilter === 'server' ? ' selected' : '') + '>Server Only</option>';
+      Object.keys(clientIds).forEach(function(clientId) {
+        html += '<option value="' + escapeHtml(clientId) + '"' + (selectedClientFilter === clientId ? ' selected' : '') + '>Client: ' + escapeHtml(clientId.substring(0, 12)) + '...</option>';
+      });
+      html += '</select>';
+      html += '</div>';
+    }
+
     var filteredLogs = allLogs.filter(function(log) {
       var isFrontend = log.context && log.context.type === 'frontend';
+
+      // Client filter
+      if (selectedClientFilter !== 'all') {
+        if (selectedClientFilter === 'current') {
+          // Show only logs from current client
+          if (!log.context || log.context.clientId !== state.clientId) {
+            return false;
+          }
+        } else if (selectedClientFilter === 'server') {
+          // Show only server logs (no clientId)
+          if (log.context && log.context.clientId) {
+            return false;
+          }
+        } else {
+          // Show only logs from specific client
+          if (!log.context || log.context.clientId !== selectedClientFilter) {
+            return false;
+          }
+        }
+      }
 
       if (isFrontend && !state.debugLogFilters.frontend) {
         return false;
@@ -642,6 +862,16 @@
         html += '<div class="flex items-center gap-2">';
         html += '<span class="text-gray-500 text-xs whitespace-nowrap">' + formatLogTime(log.timestamp) + '</span>';
         html += '<span class="' + levelClass + ' text-xs font-semibold w-12">' + log.level.toUpperCase() + '</span>';
+
+        // Add client indicator
+        if (log.context && log.context.clientId) {
+          var isCurrentClient = log.context.clientId === state.clientId;
+          var clientLabel = isCurrentClient ? 'This Client' : 'Client ' + log.context.clientId.substring(0, 8);
+          var clientColor = isCurrentClient ? 'bg-blue-600' : 'bg-purple-600';
+          html += '<span class="text-xs px-2 py-0.5 rounded ' + clientColor + ' text-white" title="' + escapeHtml(log.context.clientId) + '">' + escapeHtml(clientLabel) + '</span>';
+        } else if (!isFrontend) {
+          html += '<span class="text-xs px-2 py-0.5 rounded bg-gray-600 text-white">Server</span>';
+        }
 
         if (log.name) {
           html += '<span class="text-gray-600 text-xs">[' + escapeHtml(log.name) + ']</span>';
@@ -743,6 +973,232 @@
     $('#debug-all-processes-content').html(html);
   }
 
+  function renderResourcesTab() {
+    var html = '';
+
+    // Get resource stats from ResourceMonitor (current client)
+    var currentStats = ResourceMonitor ? ResourceMonitor.getStats() : null;
+
+    // Get all client resources from state
+    var allClientResources = state && state.allClientResources ? state.allClientResources : {};
+    var hasRemoteClients = Object.keys(allClientResources).length > 0;
+
+    // Get currently selected client filter (preserve selection between renders)
+    var selectedClient = 'all';
+    try {
+      var filterElement = $('#resource-client-filter');
+      if (filterElement.length && filterElement.val) {
+        selectedClient = filterElement.val() || 'all';
+      }
+    } catch (e) {
+      // jQuery val() might not be available in tests
+    }
+
+    // Add client selector
+    html += '<div class="mb-4 flex items-center justify-between">';
+    html += '<div class="flex items-center gap-2">';
+    html += '<label class="text-sm text-gray-400">Show Resources From:</label>';
+    html += '<select id="resource-client-filter" class="bg-gray-700 text-gray-300 px-2 py-1 rounded text-sm border border-gray-600">';
+    html += '<option value="all"' + (selectedClient === 'all' ? ' selected' : '') + '>All Clients</option>';
+    html += '<option value="current"' + (selectedClient === 'current' ? ' selected' : '') + '>Current Client Only</option>';
+    if (hasRemoteClients) {
+      Object.keys(allClientResources).forEach(function(clientId) {
+        html += '<option value="' + escapeHtml(clientId) + '"' + (selectedClient === clientId ? ' selected' : '') + '>Client: ' + escapeHtml(clientId.substring(0, 12)) + '...</option>';
+      });
+    }
+    html += '</select>';
+    html += '</div>';
+    html += '</div>';
+
+    if (selectedClient === 'current' && !currentStats) {
+      html += '<div class="text-gray-500 text-center py-8">Resource monitoring not available</div>';
+      $('#debug-resources-content').html(html);
+      return;
+    }
+
+    // Get stats based on selection
+    var stats, clientInfo;
+    if (selectedClient === 'current') {
+      stats = currentStats;
+      clientInfo = stats ? stats.clientInfo : null;
+    } else if (selectedClient === 'all') {
+      // Aggregate stats from all clients
+      stats = aggregateAllClientStats(currentStats, allClientResources);
+      clientInfo = null; // Multiple clients
+    } else {
+      // Specific remote client
+      var clientData = allClientResources[selectedClient];
+      stats = clientData ? clientData.stats : null;
+      clientInfo = stats ? stats.clientInfo : null;
+    }
+
+    if (!stats) {
+      html += '<div class="text-gray-500 text-center py-8">No resource data available for selected client</div>';
+      $('#debug-resources-content').html(html);
+      return;
+    }
+
+    // Summary section
+    html += '<div class="bg-gray-800 rounded-lg p-4 mb-4">';
+    html += '<h4 class="text-gray-300 font-semibold mb-3">Resource Load Summary</h4>';
+
+    // Client info summary
+    if (selectedClient === 'all') {
+      html += '<div class="mb-3 pb-3 border-b border-gray-700 text-xs text-gray-400">';
+      html += '<div><span class="text-gray-500">Showing:</span> <span class="text-gray-300">Resources from all connected clients</span></div>';
+      html += '</div>';
+    } else if (clientInfo) {
+      html += '<div class="mb-3 pb-3 border-b border-gray-700 text-xs text-gray-400">';
+      html += '<div class="grid grid-cols-1 md:grid-cols-2 gap-2">';
+      html += '<div><span class="text-gray-500">Client ID:</span> <span class="text-gray-300 font-mono">' + escapeHtml(clientInfo.clientId) + '</span></div>';
+      html += '<div><span class="text-gray-500">Platform:</span> <span class="text-gray-300">' + escapeHtml(clientInfo.platform) + '</span></div>';
+
+      var userAgent = clientInfo.userAgent || 'Unknown';
+      var shortUserAgent = userAgent.length > 100 ? userAgent.substring(0, 100) + '...' : userAgent;
+      html += '<div class="md:col-span-2"><span class="text-gray-500">User Agent:</span> <span class="text-gray-300" title="' + escapeHtml(userAgent) + '">' + escapeHtml(shortUserAgent) + '</span></div>';
+      html += '</div>';
+      html += '</div>';
+    }
+
+    html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-4">';
+
+    html += '<div class="text-center">';
+    html += '<div class="text-2xl font-bold text-blue-400">' + stats.total + '</div>';
+    html += '<div class="text-xs text-gray-400">Total</div>';
+    html += '</div>';
+
+    html += '<div class="text-center">';
+    html += '<div class="text-2xl font-bold text-green-400">' + stats.loaded + '</div>';
+    html += '<div class="text-xs text-gray-400">Loaded</div>';
+    html += '</div>';
+
+    html += '<div class="text-center">';
+    html += '<div class="text-2xl font-bold text-red-400">' + stats.failed + '</div>';
+    html += '<div class="text-xs text-gray-400">Failed</div>';
+    html += '</div>';
+
+    html += '<div class="text-center">';
+    html += '<div class="text-2xl font-bold text-yellow-400">' + stats.pending + '</div>';
+    html += '<div class="text-xs text-gray-400">Pending</div>';
+    html += '</div>';
+
+    html += '</div>';
+    html += '</div>';
+
+    // Use all resources without filtering
+    var filteredResources = stats.resources;
+
+    // Resource list
+    html += '<div class="space-y-2">';
+
+    if (filteredResources && filteredResources.length > 0) {
+      // Sort resources by start time (newest first)
+      filteredResources.sort(function(a, b) { return b.startTime - a.startTime; });
+
+      filteredResources.forEach(function(resource, index) {
+        var statusColor = resource.status === 'loaded' ? 'text-green-400' :
+                         resource.status === 'failed' ? 'text-red-400' : 'text-yellow-400';
+        var statusIcon = resource.status === 'loaded' ? '✓' :
+                        resource.status === 'failed' ? '✗' : '⋯';
+        var bgColor = resource.status === 'failed' ? 'bg-red-900/20' : '';
+        var resourceId = 'resource-' + index;
+
+        html += '<div class="bg-gray-800 ' + bgColor + ' rounded p-3 font-mono text-xs debug-resource-item" data-resource-id="' + resourceId + '">';
+
+        // Header row with status, type, and duration
+        html += '<div class="flex items-start justify-between mb-1">';
+        html += '<div class="flex items-center gap-2">';
+        html += '<span class="' + statusColor + ' text-lg">' + statusIcon + '</span>';
+        html += '<span class="text-gray-400">' + resource.type.toUpperCase() + '</span>';
+        if (resource.httpStatus) {
+          html += '<span class="text-orange-400 text-xs">HTTP ' + resource.httpStatus + '</span>';
+        }
+        html += '</div>';
+
+        html += '<div class="flex items-center gap-2 text-xs">';
+        if (resource.timestamp) {
+          html += '<span class="text-gray-500">' + formatLogTime(resource.timestamp) + '</span>';
+        }
+        if (resource.duration !== null) {
+          var durationColor = resource.duration > 1000 ? 'text-yellow-400' : 'text-gray-400';
+          html += '<span class="' + durationColor + '">' + resource.duration + 'ms</span>';
+        }
+        html += '</div>';
+
+        html += '</div>';
+
+        // URL
+        html += '<div class="text-gray-300 break-all mb-2">' + escapeHtml(resource.url) + '</div>';
+
+        // Error message if any
+        if (resource.error) {
+          html += '<div class="text-red-400 text-xs mb-2">' + escapeHtml(resource.error) + '</div>';
+        }
+
+        // Client info (collapsible)
+        if (resource.clientInfo) {
+          html += '<div class="border-t border-gray-700 pt-2 mt-2">';
+          html += '<button class="flex items-center gap-1 text-purple-400 hover:text-purple-300 text-xs debug-resource-toggle" data-target="' + resourceId + '-client">';
+          html += '<svg class="w-3 h-3 debug-resource-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">';
+          html += '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>';
+          html += '</svg>';
+          html += 'Client Information';
+          html += '</button>';
+
+          html += '<div id="' + resourceId + '-client" class="hidden mt-2 pl-4 space-y-1 text-xs text-gray-400">';
+
+          // User Agent (truncated with full text on hover)
+          var userAgent = resource.clientInfo.userAgent || 'Unknown';
+          var shortUserAgent = userAgent.length > 80 ? userAgent.substring(0, 80) + '...' : userAgent;
+          html += '<div><span class="text-gray-500">User Agent:</span> <span class="text-gray-300" title="' + escapeHtml(userAgent) + '">' + escapeHtml(shortUserAgent) + '</span></div>';
+
+          html += '<div><span class="text-gray-500">Platform:</span> <span class="text-gray-300">' + escapeHtml(resource.clientInfo.platform) + '</span></div>';
+          html += '<div><span class="text-gray-500">Language:</span> <span class="text-gray-300">' + escapeHtml(resource.clientInfo.language) + '</span></div>';
+          html += '<div><span class="text-gray-500">Screen:</span> <span class="text-gray-300">' + escapeHtml(resource.clientInfo.screenResolution) + '</span></div>';
+          html += '<div><span class="text-gray-500">Viewport:</span> <span class="text-gray-300">' + escapeHtml(resource.clientInfo.viewport) + '</span></div>';
+          html += '<div><span class="text-gray-500">Cookies:</span> <span class="text-gray-300">' + (resource.clientInfo.cookiesEnabled ? 'Enabled' : 'Disabled') + '</span></div>';
+          html += '<div><span class="text-gray-500">Online:</span> <span class="text-gray-300">' + (resource.clientInfo.online ? 'Yes' : 'No') + '</span></div>';
+          html += '<div><span class="text-gray-500">Client ID:</span> <span class="text-gray-300 font-mono">' + escapeHtml(resource.clientInfo.clientId) + '</span></div>';
+
+          html += '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+      });
+    } else {
+      if (stats.resources && stats.resources.length > 0) {
+        html += '<div class="text-gray-500 text-center py-8">No resources match the current filters</div>';
+      } else {
+        html += '<div class="text-gray-500 text-center py-8">No resources tracked yet</div>';
+      }
+    }
+
+    html += '</div>';
+
+    $('#debug-resources-content').html(html);
+
+    // Set up click handlers for expandable sections
+    setupResourceToggleHandlers();
+  }
+
+  function setupResourceToggleHandlers() {
+    // Check if jQuery event methods are available (might not be in tests)
+    if (!$ || !$.fn || !$.fn.off || !$.fn.on) {
+      return;
+    }
+
+    $(document).off('click', '.debug-resource-toggle').on('click', '.debug-resource-toggle', function(e) {
+      e.stopPropagation();
+      var targetId = $(this).data('target');
+      var $target = $('#' + targetId);
+      var $chevron = $(this).find('.debug-resource-chevron');
+
+      $target.toggleClass('hidden');
+      $chevron.toggleClass('rotate-90');
+    });
+  }
+
   function getLevelBgClass(level) {
     switch (level) {
       case 'error': return 'bg-red-900/20';
@@ -761,21 +1217,144 @@
     }
   }
 
+  /**
+   * Show a permanent loading mask for server shutdown
+   */
+  function showShutdownMask() {
+    // Create overlay that covers the entire screen
+    var $mask = $('<div></div>')
+      .attr('id', 'shutdown-loading-mask')
+      .css({
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 99999, // Ensure it's above everything
+        cursor: 'wait'
+      });
+
+    // Create content container
+    var $content = $('<div></div>')
+      .css({
+        backgroundColor: '#1f2937',
+        padding: '2rem',
+        borderRadius: '0.5rem',
+        textAlign: 'center',
+        border: '1px solid #374151'
+      });
+
+    // Add spinner
+    var $spinner = $('<div class="animate-spin mb-4"></div>')
+      .css({
+        width: '3rem',
+        height: '3rem',
+        border: '3px solid #374151',
+        borderTopColor: '#3b82f6',
+        borderRadius: '50%',
+        margin: '0 auto 1rem'
+      });
+
+    // Add text
+    var $text = $('<div></div>')
+      .css({
+        color: '#e5e7eb',
+        fontSize: '1.125rem',
+        fontWeight: '500'
+      })
+      .text('Shutting down server...');
+
+    var $subtext = $('<div></div>')
+      .css({
+        color: '#9ca3af',
+        fontSize: '0.875rem',
+        marginTop: '0.5rem'
+      })
+      .text('Please wait while the server shuts down gracefully');
+
+    // Assemble and append
+    $content.append($spinner, $text, $subtext);
+    $mask.append($content);
+    $('body').append($mask);
+
+    // Prevent any interaction
+    $(document).on('keydown.shutdown mousedown.shutdown click.shutdown', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    });
+
+    // Start polling for server availability
+    pollForServerRestart();
+  }
+
+  /**
+   * Poll the server to detect when it comes back online after shutdown
+   */
+  function pollForServerRestart() {
+    var pollInterval = 1000; // 1 second
+    var maxAttempts = 300; // 5 minutes max
+    var attempts = 0;
+
+    function checkServer() {
+      attempts++;
+
+      // Check server with auth parameter to detect when login is needed
+      $.ajax({
+        url: '/api/health?auth=1',
+        type: 'GET', // Changed from HEAD to GET to receive response body
+        timeout: 2000, // 2 second timeout for each attempt
+        success: function() {
+          // Server is back but we're still authenticated - keep polling
+          // This shouldn't happen in normal flow, but handle it gracefully
+          if (attempts < maxAttempts) {
+            setTimeout(checkServer, pollInterval);
+          }
+        },
+        error: function(xhr) {
+          if (xhr.status === 401) {
+            // Server is back online but we need to login - reload the page
+            window.location.reload();
+          } else {
+            // Server still down or other error
+            if (attempts < maxAttempts) {
+              // Continue polling
+              setTimeout(checkServer, pollInterval);
+            } else {
+              // After 5 minutes, show a different message
+              $('#shutdown-loading-mask .text-gray-300').text('Server shutdown complete. You may close this window.');
+            }
+          }
+        }
+      });
+    }
+
+    // Start polling after a short delay to allow shutdown to begin
+    setTimeout(checkServer, 2000);
+  }
+
   function setupHandlers() {
     // Shutdown button handler
     $(document).on('click', '#btn-debug-shutdown', function() {
       showConfirm('Shutdown Server', 'Are you sure you want to shutdown the server?', { danger: true, confirmText: 'Shutdown' })
         .then(function(confirmed) {
           if (confirmed) {
+            // Show the permanent loading mask
+            showShutdownMask();
+
+            // Initiate shutdown
             api.shutdownServer()
               .done(function() {
-                showToast('Server shutdown initiated', 'success');
+                // Keep the mask showing - server is shutting down
+                // The browser will eventually lose connection
               })
               .fail(function(xhr) {
-                var errorMsg = xhr.responseJSON && xhr.responseJSON.error
-                  ? xhr.responseJSON.error
-                  : 'Failed to shutdown server';
-                showToast(errorMsg, 'error');
+                // Even on error, keep the mask to prevent further actions
+                // Server might be partially shutdown
               });
           }
         });
@@ -822,6 +1401,18 @@
       }
     });
 
+    // Resource client filter handler
+    $(document).on('change', '#resource-client-filter', function() {
+      renderResourcesTab();
+    });
+
+    // Log client filter handler
+    $(document).on('change', '#log-client-filter', function() {
+      if ($('#debug-tab-logs').is(':visible')) {
+        refresh();
+      }
+    });
+
     // View Full button click handler
     $(document).on('click', '.btn-view-full-log', function(e) {
       e.stopPropagation(); // Prevent log item expand/collapse
@@ -837,8 +1428,26 @@
       } else if (logType === 'all') {
         // For filtered logs, we need to find the actual log
         var allLogs = currentLogsData.allLogs;
+        var selectedClientFilter = $('#log-client-filter').val() || 'all';
         var filteredLogs = allLogs.filter(function(l) {
           var isFrontend = l.context && l.context.type === 'frontend';
+
+          // Apply client filter
+          if (selectedClientFilter !== 'all') {
+            if (selectedClientFilter === 'current') {
+              if (!l.context || l.context.clientId !== state.clientId) {
+                return false;
+              }
+            } else if (selectedClientFilter === 'server') {
+              if (l.context && l.context.clientId) {
+                return false;
+              }
+            } else {
+              if (!l.context || l.context.clientId !== selectedClientFilter) {
+                return false;
+              }
+            }
+          }
 
           if (isFrontend && !state.debugLogFilters.frontend) {
             return false;
@@ -876,8 +1485,26 @@
       if (logType === 'io') {
         log = currentLogsData.ioLogs[logIndex];
       } else if (logType === 'all') {
+        var selectedClientFilter = $('#log-client-filter').val() || 'all';
         var filteredLogs = currentLogsData.allLogs.filter(function(l) {
           var isFrontend = l.context && l.context.type === 'frontend';
+
+          // Apply client filter
+          if (selectedClientFilter !== 'all') {
+            if (selectedClientFilter === 'current') {
+              if (!l.context || l.context.clientId !== state.clientId) {
+                return false;
+              }
+            } else if (selectedClientFilter === 'server') {
+              if (l.context && l.context.clientId) {
+                return false;
+              }
+            } else {
+              if (!l.context || l.context.clientId !== selectedClientFilter) {
+                return false;
+              }
+            }
+          }
 
           if (isFrontend && !state.debugLogFilters.frontend) {
             return false;
@@ -922,6 +1549,8 @@
     close: close,
     refresh: refresh,
     setupHandlers: setupHandlers,
-    stopAutoRefresh: stopAutoRefresh
+    stopAutoRefresh: stopAutoRefresh,
+    renderResourcesTab: renderResourcesTab,
+    handleFrontendError: handleFrontendError
   };
 }));

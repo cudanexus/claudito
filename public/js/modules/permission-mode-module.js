@@ -250,77 +250,17 @@
    * Approve plan and switch to Accept Edits mode
    */
   function approvePlanAndSwitch() {
-    var projectId = state.selectedProjectId;
-
-    if (!projectId) return;
-
-    var sessionId = state.currentSessionId;
-
-    // Update state to Accept Edits mode
-    state.permissionMode = 'acceptEdits';
-    state.pendingPermissionMode = null;
-    updatePendingIndicator();
-    updateButtons();
-
-    // Disable UI during mode switch
-    setSwitchingState(true);
-
-    showToast('Plan approved. Switching to Accept Edits mode...', 'info');
-
-    // Stop the current agent
-    api.stopAgent(projectId)
+    // Simply send "yes" as a message - the backend will handle the rest
+    api.sendAgentMessage(state.selectedProjectId, 'yes')
       .done(function() {
-        updateProjectStatusById(projectId, 'stopped');
-
-        // Wait 1 second before restarting to avoid "session already in use" errors
-        setTimeout(function() {
-          showToast('Starting implementation...', 'info');
-
-          var initialMessage = 'You can now start implementing the plan.';
-
-          // Start the agent in Accept Edits mode with the implementation message
-          api.startInteractiveAgent(projectId, initialMessage, [], sessionId, 'acceptEdits')
-            .done(function(response) {
-              state.currentAgentMode = 'interactive';
-              updateProjectStatusById(projectId, 'running');
-              startAgentStatusPolling(projectId);
-              setSwitchingState(false);
-
-              // Clear waiting state since we're sending a message
-              // Increment version to ignore stale updates from server
-              var project = findProjectById(projectId);
-
-              if (project) {
-                project.isWaitingForInput = false;
-                state.waitingVersion++;
-                renderProjectList();
-              }
-
-              if (response && response.sessionId) {
-                state.currentSessionId = response.sessionId;
-              }
-
-              appendMessage(projectId, {
-                type: 'system',
-                content: 'Plan approved. Agent restarted with Accept Edits mode',
-                timestamp: new Date().toISOString()
-              });
-
-              appendMessage(projectId, {
-                type: 'user',
-                content: initialMessage,
-                timestamp: new Date().toISOString()
-              });
-            })
-            .fail(function(xhr) {
-              setSwitchingState(false);
-              showErrorToast(xhr, 'Failed to restart agent');
-            });
-        }, 1000);
+        // Update mode to reflect the expected state after approval
+        state.permissionMode = 'acceptEdits';
+        state.pendingPermissionMode = null;
+        updatePendingIndicator();
+        updateButtons();
       })
       .fail(function(xhr) {
-        setSwitchingState(false);
-        showErrorToast(xhr, 'Failed to stop agent');
+        showErrorToast(xhr, 'Failed to send plan approval');
       });
   }
 

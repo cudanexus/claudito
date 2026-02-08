@@ -49,6 +49,13 @@ describe('PermissionModeModule', () => {
       startInteractiveAgent: jest.fn().mockReturnValue({
         done: jest.fn().mockReturnThis(),
         fail: jest.fn().mockReturnThis()
+      }),
+      sendAgentMessage: jest.fn().mockReturnValue({
+        done: jest.fn().mockImplementation(function(cb) {
+          if (cb) cb();
+          return this;
+        }),
+        fail: jest.fn().mockReturnThis()
       })
     };
 
@@ -314,13 +321,9 @@ describe('PermissionModeModule', () => {
 
       PermissionModeModule.approvePlanAndSwitch();
 
+      expect(mockApi.sendAgentMessage).toHaveBeenCalledWith('test-project-id', 'yes');
       expect(mockState.permissionMode).toBe('acceptEdits');
       expect(mockState.pendingPermissionMode).toBeNull();
-      expect(mockApi.stopAgent).toHaveBeenCalledWith('test-project-id');
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Plan approved. Switching to Accept Edits mode...',
-        'info'
-      );
     });
 
     it('should do nothing if no project selected', () => {
@@ -328,7 +331,7 @@ describe('PermissionModeModule', () => {
 
       PermissionModeModule.approvePlanAndSwitch();
 
-      expect(mockApi.stopAgent).not.toHaveBeenCalled();
+      expect(mockApi.sendAgentMessage).toHaveBeenCalledWith(null, 'yes');
     });
   });
 

@@ -25,6 +25,15 @@ export interface ProjectPermissionOverrides {
   defaultMode?: 'acceptEdits' | 'plan';
 }
 
+export interface McpOverrides {
+  enabled: boolean;
+  serverOverrides: {
+    [serverId: string]: {
+      enabled: boolean;
+    };
+  };
+}
+
 export interface ProjectStatus {
   id: string;
   name: string;
@@ -37,6 +46,8 @@ export interface ProjectStatus {
   permissionOverrides: ProjectPermissionOverrides | null;
   /** Project-specific model override (null = use global default) */
   modelOverride: string | null;
+  /** Project-specific MCP server overrides */
+  mcpOverrides: McpOverrides | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -63,6 +74,7 @@ export interface ProjectRepository {
   updateContextUsage(id: string, contextUsage: ContextUsageData | null): Promise<ProjectStatus | null>;
   updatePermissionOverrides(id: string, overrides: ProjectPermissionOverrides | null): Promise<ProjectStatus | null>;
   updateModelOverride(id: string, model: string | null): Promise<ProjectStatus | null>;
+  updateMcpOverrides(id: string, overrides: McpOverrides | null): Promise<ProjectStatus | null>;
   delete(id: string): Promise<boolean>;
 }
 
@@ -326,6 +338,7 @@ export class FileProjectRepository implements ProjectRepository {
       lastContextUsage: null,
       permissionOverrides: null,
       modelOverride: null,
+      mcpOverrides: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -419,6 +432,18 @@ export class FileProjectRepository implements ProjectRepository {
     }
 
     status.modelOverride = model;
+    this.saveStatus(status);
+    return Promise.resolve({ ...status });
+  }
+
+  updateMcpOverrides(id: string, overrides: McpOverrides | null): Promise<ProjectStatus | null> {
+    const status = this.loadStatus(id);
+
+    if (!status) {
+      return Promise.resolve(null);
+    }
+
+    status.mcpOverrides = overrides;
     this.saveStatus(status);
     return Promise.resolve({ ...status });
   }

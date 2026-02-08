@@ -67,6 +67,7 @@ export interface StreamHandlerEvents {
   error: (error: Error) => void;
   sessionNotFound: (sessionId: string) => void;
   permissionRequest: (request: PermissionRequest) => void;
+  exitPlanMode: (planContent: string) => void;
 }
 
 /**
@@ -80,6 +81,12 @@ export class StreamHandler extends EventEmitter {
   private partialJson = '';
   private contextUsage: ContextUsage | null = null;
   private waitingVersion = 0;
+  // Track emitted content to avoid duplicates from cumulative CLI events
+  private lastEmittedText = '';
+  private emittedToolIds = new Set<string>();
+  private hasEmittedExitPlanMode = false;
+  private hasEmittedEnterPlanMode = false;
+  private lastEmittedQuestion = '';
 
   constructor(
     private readonly logger: Logger,
@@ -91,34 +98,44 @@ export class StreamHandler extends EventEmitter {
 
   /**
    * Process a line from the Claude CLI stream.
+   * With --output-format stream-json, output is plain JSON lines (no SSE prefix).
    */
   processLine(line: string): void {
     const trimmed = line.trim();
 
-    if (!trimmed || trimmed === 'event: message' || trimmed === 'data: [DONE]') {
+    if (!trimmed) {
       return;
     }
 
-    // Check for raw event types first
-    if (trimmed.startsWith('event: ')) {
-      this.handleRawEvent(trimmed);
+    this.logger.debug('STDOUT <<< Processing line', {
+      length: trimmed.length,
+      preview: trimmed.substring(0, 200),
+    });
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      // Not valid JSON, emit as plain text output
+      this.logger.debug('Non-JSON output', { lineLength: trimmed.length });
+      this.emitTextMessage(trimmed);
       return;
     }
 
-    // Skip non-data lines
-    if (!trimmed.startsWith('data: ')) {
+    if (typeof parsed !== 'object' || parsed === null) {
+      // Not a JSON object, emit as plain text
+      this.emitTextMessage(trimmed);
       return;
     }
-
-    const jsonStr = trimmed.substring(6);
 
     try {
-      const event = JSON.parse(jsonStr) as StreamEvent;
+      const event = parsed as StreamEvent;
       this.handleStreamEvent(event);
     } catch (error) {
-      this.logger.debug('Failed to parse stream event', {
-        line: trimmed,
-        error: error instanceof Error ? error.message : 'Unknown error'
+      // Error handling the event - log it but don't lose the message
+      this.logger.error('Error handling stream event', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        eventType: (parsed as Record<string, unknown>).type,
       });
     }
   }
@@ -138,58 +155,337 @@ export class StreamHandler extends EventEmitter {
     }
   }
 
+  // Event handler map for efficient routing
+  private readonly eventHandlers: Record<string, (event: StreamEvent) => void> = {
+    // Claude CLI event types
+    'system': (event) => this.handleSystemEvent(event),
+    'assistant': (event) => this.handleAssistantMessage(event),
+    'user': (event) => this.handleUserMessage(event),
+
+    // API streaming event types (kept for compatibility)
+    'message_start': (event) => this.handleMessageStart(event),
+    'content_block_start': (event) => this.handleContentBlockStart(event),
+    'content_block_delta': (event) => this.handleContentBlockDelta(event),
+    'content_block_stop': () => this.handleContentBlockStop(),
+    'message_delta': (event) => this.handleMessageDelta(event),
+    'message_stop': () => this.handleMessageStop(),
+    'error': (event) => this.handleError(event),
+    'assistant_event': (event) => this.handleAssistantEvent(event),
+    'user_event': (event) => this.handleUserEvent(event),
+    'permission_request': (event) => this.handlePermissionRequest(event),
+    'stdout': (event) => this.emitOutputMessage('stdout', event.content || ''),
+    'stderr': (event) => this.emitOutputMessage('stderr', event.content || ''),
+    'result': (event) => this.handleResult(event),
+    'session_not_found': (event) => this.handleSessionNotFound(event),
+    'status_change': (event) => this.handleStatusChange(event),
+  };
+
   /**
    * Main event router for stream events.
+   * Handles both Claude CLI events (system, assistant, user) and API streaming events.
    */
   private handleStreamEvent(event: StreamEvent): void {
     const { type } = event;
+    const handler = this.eventHandlers[type];
 
-    switch (type) {
-      case 'message_start':
-        this.handleMessageStart(event);
+    if (handler) {
+      handler(event);
+    } else {
+      this.logger.debug('Unhandled stream event type', { type });
+    }
+  }
+
+  /**
+   * Handle Claude CLI system events (init, status, etc.)
+   */
+  private handleSystemEvent(event: StreamEvent): void {
+    // Cast to access CLI-specific fields
+    const cliEvent = event as unknown as {
+      subtype?: string;
+      session_id?: string;
+      status?: string;
+    };
+
+    switch (cliEvent.subtype) {
+      case 'init':
+        this.logger.info('Claude CLI initialized', {
+          sessionId: cliEvent.session_id,
+        });
+        // Reset tracking for new session
+        this.resetEmittedTracking();
+
+        // Emit a system message with the session ID so the agent can capture it
+        if (cliEvent.session_id) {
+          this.emitMessage({
+            type: 'system',
+            content: `Session ID: ${cliEvent.session_id}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
         break;
-      case 'content_block_start':
-        this.handleContentBlockStart(event);
+      case 'status':
+        this.logger.info('Claude CLI status', { status: cliEvent.status });
+        if (cliEvent.status === 'compacting') {
+          // Emit status change message when compaction starts
+          this.emitStatusChangeMessage('compacting');
+        }
         break;
-      case 'content_block_delta':
-        this.handleContentBlockDelta(event);
+      case 'compact':
+        this.logger.info('Claude CLI compact reached');
+        // Emit compaction message
+        this.emitCompactionMessage(event.content || 'Context was compacted');
         break;
-      case 'content_block_stop':
-        this.handleContentBlockStop();
-        break;
-      case 'message_delta':
-        this.handleMessageDelta(event);
-        break;
-      case 'message_stop':
-        this.handleMessageStop();
-        break;
-      case 'error':
-        this.handleError(event);
-        break;
-      case 'assistant_event':
-        this.handleAssistantEvent(event);
-        break;
-      case 'user_event':
-        this.handleUserEvent(event);
-        break;
-      case 'permission_request':
-        this.handlePermissionRequest(event);
-        break;
-      case 'stdout':
-      case 'stderr':
-        this.emitOutputMessage(type, event.content || '');
-        break;
-      case 'result':
-        this.handleResult(event);
-        break;
-      case 'session_not_found':
-        this.handleSessionNotFound(event);
-        break;
-      case 'status_change':
-        this.handleStatusChange(event);
+      case 'compact_boundary':
+        this.logger.info('Claude CLI compact boundary reached');
+        // Emit compaction message when compaction completes
+        this.emitCompactionMessage('Context has been compacted to reduce token usage');
         break;
       default:
-        this.logger.debug('Unhandled stream event type', { type });
+        this.logger.debug('Unhandled system subtype', { subtype: cliEvent.subtype });
+    }
+  }
+
+  /**
+   * Reset tracking for emitted content (called when new turn starts).
+   */
+  private resetEmittedTracking(): void {
+    this.lastEmittedText = '';
+    this.emittedToolIds.clear();
+    this.hasEmittedExitPlanMode = false;
+    this.hasEmittedEnterPlanMode = false;
+    this.lastEmittedQuestion = '';
+  }
+
+  /**
+   * Handle Claude CLI assistant message events.
+   * These contain the full assistant message with content blocks.
+   * Note: Claude CLI sends cumulative content, so we track what we've emitted
+   * to avoid duplicating output.
+   */
+  private handleAssistantMessage(event: StreamEvent): void {
+    const message = this.extractAssistantMessage(event);
+    if (!message?.content) {
+      return;
+    }
+
+    // Update context usage if available
+    if (message.usage) {
+      this.updateContextUsage(message.usage);
+    }
+
+    // Process each content block
+    for (const block of message.content) {
+      this.processAssistantContentBlock(block);
+    }
+  }
+
+  /**
+   * Extract and type the assistant message from the event.
+   */
+  private extractAssistantMessage(event: StreamEvent): {
+    id?: string;
+    content?: Array<{
+      type: string;
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
+    usage?: StreamEventUsage;
+  } {
+    return event.message as {
+      id?: string;
+      content?: Array<{
+        type: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+      }>;
+      usage?: StreamEventUsage;
+    };
+  }
+
+  /**
+   * Process a single content block from an assistant message.
+   */
+  private processAssistantContentBlock(block: {
+    type: string;
+    text?: string;
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  }): void {
+    if (block.type === 'text' && block.text) {
+      this.processTextBlock(block.text);
+    } else if (block.type === 'tool_use' && block.id) {
+      this.processToolUseBlock(block);
+    }
+  }
+
+  /**
+   * Process a text content block, only emitting new content.
+   */
+  private processTextBlock(text: string): void {
+    const newText = this.getNewTextContent(text);
+    if (newText) {
+      this.emitTextMessage(newText);
+    }
+  }
+
+  /**
+   * Process a tool use content block.
+   */
+  private processToolUseBlock(block: {
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  }): void {
+    if (!block.id) {
+      return;
+    }
+
+    // Only emit tool use if we haven't seen this tool ID
+    if (this.emittedToolIds.has(block.id)) {
+      return;
+    }
+
+    this.emittedToolIds.add(block.id);
+
+    // Check for special tools
+    if (block.name === 'ExitPlanMode') {
+      this.handleExitPlanModeTool(block.input);
+    } else if (block.name === 'AskUserQuestion') {
+      this.handleAskUserQuestionTool(block.input, block.id);
+    } else if (block.name === 'EnterPlanMode') {
+      this.handleEnterPlanModeTool();
+    } else {
+      this.emitToolMessage(block.name || 'unknown', block.input || {}, block.id);
+    }
+  }
+
+  /**
+   * Handle the special EnterPlanMode tool.
+   */
+  private handleEnterPlanModeTool(): void {
+    // Prevent multiple EnterPlanMode events in the same turn
+    if (this.hasEmittedEnterPlanMode) {
+      this.logger.warn('Ignoring duplicate EnterPlanMode in same turn');
+      return;
+    }
+
+    this.hasEmittedEnterPlanMode = true;
+    this.emitPlanModeMessage('enter');
+  }
+
+  /**
+   * Handle the special ExitPlanMode tool.
+   */
+  private handleExitPlanModeTool(input?: Record<string, unknown>): void {
+    // Prevent multiple ExitPlanMode events in the same turn
+    if (this.hasEmittedExitPlanMode) {
+      this.logger.warn('Ignoring duplicate ExitPlanMode in same turn');
+      return;
+    }
+
+    const planContent = this.extractPlanContent(input) || '';
+    this.logger.info('ExitPlanMode detected', { hasPlanContent: !!planContent });
+    this.hasEmittedExitPlanMode = true;
+    this.emit('exitPlanMode', planContent);
+    // Don't emit plan mode message here - agent-manager will handle it with better content
+  }
+
+  /**
+   * Handle the special AskUserQuestion tool.
+   */
+  private handleAskUserQuestionTool(
+    input?: Record<string, unknown>,
+    toolId?: string
+  ): void {
+    if (!input || !toolId) {
+      return;
+    }
+
+    // Emit as a tool_use message so the frontend can render it properly
+    this.emitToolMessage('AskUserQuestion', input, toolId);
+
+    // Also emit the waiting for input state
+    this.waitingVersion++;
+    this.emit('waitingForInput', {
+      isWaiting: true,
+      version: this.waitingVersion,
+    });
+  }
+
+  /**
+   * Extract plan content from ExitPlanMode tool input.
+   */
+  private extractPlanContent(input?: Record<string, unknown>): string | null {
+    if (!input) return null;
+
+    // The plan content might be in various fields
+    if (typeof input.plan === 'string') {
+      return input.plan;
+    }
+
+    if (typeof input.planContent === 'string') {
+      return input.planContent;
+    }
+
+    // If allowedPrompts is provided, format the plan from available data
+    if (input.allowedPrompts && Array.isArray(input.allowedPrompts)) {
+      const prompts = input.allowedPrompts as Array<{ tool: string; prompt: string }>;
+      return prompts.map(p => `${p.tool}: ${p.prompt}`).join('\n');
+    }
+
+    return null;
+  }
+
+  /**
+   * Get only the new portion of text content that hasn't been emitted yet.
+   */
+  private getNewTextContent(fullText: string): string | null {
+    if (fullText.startsWith(this.lastEmittedText)) {
+      const newText = fullText.substring(this.lastEmittedText.length);
+      if (newText) {
+        this.lastEmittedText = fullText;
+        return newText;
+      }
+      return null;
+    }
+    // Text doesn't match what we've emitted - this is a new message
+    this.lastEmittedText = fullText;
+    return fullText;
+  }
+
+  /**
+   * Handle Claude CLI user message events.
+   * These typically contain tool results.
+   */
+  private handleUserMessage(event: StreamEvent): void {
+    const message = event.message as {
+      content?: Array<{
+        type: string;
+        tool_use_id?: string;
+        content?: string;
+        is_error?: boolean;
+      }>;
+    };
+
+    if (!message?.content) {
+      return;
+    }
+
+    // Process tool results
+    for (const block of message.content) {
+      if (block.type === 'tool_result') {
+        const status = block.is_error ? 'failed' : 'completed';
+        this.emitToolResultWithId(
+          block.tool_use_id || 'unknown',
+          status,
+          block.content || ''
+        );
+      }
     }
   }
 
@@ -225,7 +521,7 @@ export class StreamHandler extends EventEmitter {
   private handleContentBlockStop(): void {
     if (this.currentToolUse && this.partialJson) {
       try {
-        const toolInput = JSON.parse(this.partialJson);
+        const toolInput = JSON.parse(this.partialJson) as Record<string, unknown>;
         this.emitToolMessage(
           this.currentToolUse.name || 'unknown',
           toolInput,
@@ -269,19 +565,16 @@ export class StreamHandler extends EventEmitter {
   private handleAssistantEvent(event: StreamEvent): void {
     switch (event.assistant_event_type) {
       case 'thinking':
-        // Claude is thinking - we could show this in UI
+        this.handleThinkingEvent();
         break;
       case 'tool_result':
-        if (event.tool_use_id) {
-          this.emitToolResultWithId(
-            event.tool_use_id,
-            'completed',
-            this.extractEventContent(event)
-          );
-        }
+        this.handleToolResultEvent(event);
         break;
       case 'compaction':
-        this.emitCompactionMessage(this.extractEventContent(event));
+        this.handleCompactionEvent(event);
+        break;
+      case 'ask_question':
+        this.handleAskQuestionAssistantEvent(event);
         break;
       default:
         this.logger.debug('Unhandled assistant event', {
@@ -290,30 +583,102 @@ export class StreamHandler extends EventEmitter {
     }
   }
 
+  /**
+   * Handle thinking event from Claude.
+   */
+  private handleThinkingEvent(): void {
+    // Claude is thinking - we could show this in UI
+    // Currently no action needed
+  }
+
+  /**
+   * Handle ask_question assistant event.
+   */
+  private handleAskQuestionAssistantEvent(event: StreamEvent): void {
+    // Increment waiting version to trigger waiting status
+    this.waitingVersion++;
+    this.emit('waitingForInput', {
+      isWaiting: true,
+      version: this.waitingVersion,
+    });
+
+    // Emit the question message if available
+    if (event.text || event.content) {
+      this.emitMessage({
+        type: 'question',
+        content: event.text || event.content || 'Assistant is asking a question',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Handle tool result event.
+   */
+  private handleToolResultEvent(event: StreamEvent): void {
+    if (event.tool_use_id) {
+      this.emitToolResultWithId(
+        event.tool_use_id,
+        'completed',
+        this.extractEventContent(event)
+      );
+    }
+  }
+
+  /**
+   * Handle compaction event.
+   */
+  private handleCompactionEvent(event: StreamEvent): void {
+    this.emitCompactionMessage(this.extractEventContent(event));
+  }
+
   private handleUserEvent(event: StreamEvent): void {
     switch (event.user_event_type) {
       case 'question':
-        if (event.user_input) {
-          this.emitQuestionMessage(event.user_input);
-        }
+        this.handleQuestionEvent(event);
         break;
       case 'tool_use':
-        if (event.user_input) {
-          const { tool_name, ...params } = event.user_input;
-          if (typeof tool_name === 'string') {
-            this.emitToolMessage(tool_name, params);
-          }
-        }
+        this.handleToolUseEvent(event);
         break;
       case 'plan_mode':
-        if (event.user_input?.action) {
-          this.emitPlanModeMessage(event.user_input.action as 'enter' | 'exit');
-        }
+        this.handlePlanModeEvent(event);
         break;
       default:
         this.logger.debug('Unhandled user event', {
           type: event.user_event_type,
         });
+    }
+  }
+
+  /**
+   * Handle question event from user.
+   */
+  private handleQuestionEvent(event: StreamEvent): void {
+    if (event.user_input) {
+      this.emitQuestionMessage(event.user_input);
+    }
+  }
+
+  /**
+   * Handle tool use event from user.
+   */
+  private handleToolUseEvent(event: StreamEvent): void {
+    if (!event.user_input) {
+      return;
+    }
+
+    const { tool_name, ...params } = event.user_input;
+    if (typeof tool_name === 'string') {
+      this.emitToolMessage(tool_name, params);
+    }
+  }
+
+  /**
+   * Handle plan mode event from user.
+   */
+  private handlePlanModeEvent(event: StreamEvent): void {
+    if (event.user_input?.action) {
+      this.emitPlanModeMessage(event.user_input.action as 'enter' | 'exit');
     }
   }
 
@@ -340,16 +705,40 @@ export class StreamHandler extends EventEmitter {
   }
 
   private handleResult(event: StreamEvent): void {
-    if (!event.content) return;
+    // CLI result events contain the full response in 'result' field
+    // Since handleAssistantMessage already emits the text content,
+    // we only need to handle errors here, not re-emit the result
+    const cliEvent = event as unknown as {
+      result?: string;
+      is_error?: boolean;
+      subtype?: string;
+      errors?: string[];
+    };
 
-    const lines = event.content.split('\n');
-    const errors = lines.filter(line => line.startsWith('ERROR:'));
-
-    if (errors.length > 0) {
-      this.handleResultErrors(errors);
-    } else {
-      this.emitResultMessage(event.content, false);
+    if (cliEvent.is_error) {
+      // Check for session not found error
+      if (cliEvent.errors) {
+        for (const error of cliEvent.errors) {
+          const match = error.match(/No conversation found with session ID: ([\w-]+)/);
+          if (match) {
+            this.emit('sessionNotFound', match[1]);
+            return;
+          }
+        }
+        // Handle other errors
+        this.handleResultErrors(cliEvent.errors);
+      } else if (cliEvent.result) {
+        this.emitResultMessage(cliEvent.result, true);
+      }
+    } else if (cliEvent.subtype === 'success') {
+      // Success result means Claude is now waiting for input
+      this.waitingVersion++;
+      this.emit('waitingForInput', {
+        isWaiting: true,
+        version: this.waitingVersion,
+      });
     }
+    // Success results are already shown via handleAssistantMessage
   }
 
   private handleResultErrors(errors: string[]): void {
@@ -511,7 +900,7 @@ export class StreamHandler extends EventEmitter {
   private emitCompactionMessage(summary: string): void {
     this.emitMessage({
       type: 'compaction',
-      content: `📦 Context compacted: ${summary}`,
+      content: summary,
       timestamp: new Date().toISOString(),
     });
   }
@@ -658,8 +1047,8 @@ export class StreamHandler extends EventEmitter {
       this.contextUsage.percentUsed = maxTokens > 0
         ? Math.round((this.contextUsage.totalTokens / maxTokens) * 100)
         : 0;
-
-      this.emit('contextUsage', this.contextUsage);
+      // Note: Don't emit contextUsage here to avoid infinite loop
+      // (this method is called in response to contextUsage events)
     }
   }
 }
