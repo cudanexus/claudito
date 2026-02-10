@@ -83,7 +83,10 @@
     tags.forEach(function(tag) {
       html += '<div class="flex items-center justify-between py-1 px-1 hover:bg-gray-700 rounded">' +
         '<span class="text-gray-300 truncate" title="' + escapeHtml(tag) + '">' + escapeHtml(tag) + '</span>' +
+        '<div class="flex items-center gap-1 flex-shrink-0">' +
         '<button class="git-push-tag-btn text-xs text-blue-400 hover:text-blue-300 px-1" data-tag="' + escapeHtml(tag) + '" title="Push tag">&#8593;</button>' +
+        '<button class="git-delete-tag-btn text-xs text-red-400 hover:text-red-300 px-1" data-tag="' + escapeHtml(tag) + '" title="Delete local tag">&#10005;</button>' +
+        '</div>' +
         '</div>';
     });
 
@@ -1017,6 +1020,29 @@
             $btn.html('&#8593;');
           });
       }
+    });
+
+    $(document).on('click', '.git-delete-tag-btn', function(e) {
+      e.stopPropagation();
+      if (gitOperationInProgress) return;
+      var tagName = $(this).data('tag');
+
+      if (!tagName || !state.selectedProjectId) return;
+      if (!confirm('Delete local tag "' + tagName + '"?')) return;
+
+      setGitOperationState(true);
+
+      api.gitDeleteTag(state.selectedProjectId, tagName)
+        .done(function() {
+          showToast('Tag deleted: ' + tagName, 'success');
+          loadGitTags();
+        })
+        .fail(function(xhr) {
+          showToast('Failed to delete tag: ' + getErrorMessage(xhr), 'error');
+        })
+        .always(function() {
+          setGitOperationState(false);
+        });
     });
   }
 

@@ -1341,6 +1341,21 @@
   };
 
   /**
+   * Delete a local git tag
+   * @function gitDeleteTag
+   * @memberof module:ApiClient
+   * @param {string} projectId - Project ID
+   * @param {string} name - Tag name to delete
+   * @returns {Promise<void>} Resolves when tag deleted
+   */
+  ApiClient.gitDeleteTag = function(projectId, name) {
+    return $.ajax({
+      url: baseUrl + '/api/projects/' + projectId + '/git/tags/' + encodeURIComponent(name),
+      method: 'DELETE'
+    });
+  };
+
+  /**
    * Generate a commit message using a one-off Claude agent
    * @function generateCommitMessage
    * @memberof module:ApiClient

@@ -9,6 +9,8 @@ import {
   ralphLoopStartSchema,
   gitCommitSchema,
   projectIdSchema,
+  projectAndTagNameSchema,
+  projectAndTaskIdSchema,
 } from '../../../../src/routes/projects/schemas';
 
 describe('Project Route Schemas', () => {
@@ -220,6 +222,64 @@ describe('Project Route Schemas', () => {
     it('should require positive dimensions', () => {
       const invalid = { cols: 0, rows: 24 };
       const result = shellResizeSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('projectAndTagNameSchema', () => {
+    it('should accept path-based project IDs', () => {
+      const valid = { id: 'D__Development_Typescript_claudito', name: '0.11.0' };
+      const result = projectAndTagNameSchema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept UUID project IDs', () => {
+      const valid = { id: '123e4567-e89b-12d3-a456-426614174000', name: 'v1.0.0' };
+      const result = projectAndTagNameSchema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject empty project ID', () => {
+      const invalid = { id: '', name: 'v1.0.0' };
+      const result = projectAndTagNameSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject empty tag name', () => {
+      const invalid = { id: 'some-project', name: '' };
+      const result = projectAndTagNameSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept tag names with dots and slashes', () => {
+      const valid = { id: 'my-project', name: 'release/1.2.3' };
+      const result = projectAndTagNameSchema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('projectAndTaskIdSchema', () => {
+    it('should accept path-based project IDs', () => {
+      const valid = { id: 'D__Development_Typescript_claudito', taskId: 'task-123' };
+      const result = projectAndTaskIdSchema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept UUID project IDs', () => {
+      const valid = { id: '123e4567-e89b-12d3-a456-426614174000', taskId: 'task-456' };
+      const result = projectAndTaskIdSchema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject empty project ID', () => {
+      const invalid = { id: '', taskId: 'task-123' };
+      const result = projectAndTaskIdSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject empty task ID', () => {
+      const invalid = { id: 'some-project', taskId: '' };
+      const result = projectAndTaskIdSchema.safeParse(invalid);
       expect(result.success).toBe(false);
     });
   });

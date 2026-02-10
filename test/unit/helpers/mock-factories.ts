@@ -778,6 +778,7 @@ export function createMockGitService(): jest.Mocked<GitService> {
     listTags: jest.fn().mockResolvedValue(['v1.0.0', 'v1.1.0']),
     createTag: jest.fn().mockResolvedValue(undefined),
     pushTag: jest.fn().mockResolvedValue('Tag pushed'),
+    deleteTag: jest.fn().mockResolvedValue(undefined),
   };
 }
 

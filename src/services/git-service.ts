@@ -51,6 +51,7 @@ export interface GitService {
   listTags(projectPath: string): Promise<string[]>;
   createTag(projectPath: string, name: string, message?: string): Promise<void>;
   pushTag(projectPath: string, name: string, remote?: string): Promise<string>;
+  deleteTag(projectPath: string, name: string): Promise<void>;
 }
 
 export class SimpleGitService implements GitService {
@@ -328,6 +329,15 @@ export class SimpleGitService implements GitService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new GitError(`Failed to push tag: ${message}`);
+    }
+  }
+
+  async deleteTag(projectPath: string, name: string): Promise<void> {
+    try {
+      await this.getGit(projectPath).tag(['-d', name]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new GitError(`Failed to delete tag: ${message}`);
     }
   }
 }

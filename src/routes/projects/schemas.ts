@@ -172,7 +172,7 @@ export const taskIdSchema = z.object({
 });
 
 export const projectAndTaskIdSchema = z.object({
-  id: z.string().uuid('Invalid project ID'),
+  id: z.string().min(1, 'Project ID is required'),
   taskId: z.string().min(1, 'Task ID is required'),
 });
 
@@ -181,7 +181,7 @@ export const tagNameSchema = z.object({
 });
 
 export const projectAndTagNameSchema = z.object({
-  id: z.string().uuid('Invalid project ID'),
+  id: z.string().min(1, 'Project ID is required'),
   name: z.string().min(1, 'Tag name is required'),
 });
 

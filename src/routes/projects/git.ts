@@ -341,6 +341,15 @@ export function createGitRouter(deps: ProjectRouterDependencies): Router {
     res.json({ success: true });
   }));
 
+  // Delete a local tag
+  router.delete('/tags/:name', validateParams(projectAndTagNameSchema), validateProjectExists(projectRepository), asyncHandler(async (req: Request, res: Response) => {
+    const project = req.project!;
+    const tagName = req.params['name'] as string;
+
+    await gitService.deleteTag((project).path, tagName);
+    res.json({ success: true });
+  }));
+
   // Generate commit message using one-off agent
   router.post('/generate-commit-message', validateProjectExists(projectRepository), asyncHandler(async (req: Request, res: Response) => {
     const project = req.project!;
