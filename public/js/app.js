@@ -3378,6 +3378,7 @@
   function getModelDisplayName(modelId) {
     var displayNames = {
       'claude-opus-4-6': 'Opus 4.6',
+      'claude-sonnet-4-6': 'Sonnet 4.6',
       'claude-sonnet-4-5-20250929': 'Sonnet 4.5',
       'claude-haiku-4-5-20251001': 'Haiku 4.5'
     };
