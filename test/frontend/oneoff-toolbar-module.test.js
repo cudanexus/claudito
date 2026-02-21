@@ -124,6 +124,7 @@ describe('OneOffToolbarModule', () => {
 
       expect(html).toContain('oneoff-model-select');
       expect(html).toContain('Opus 4.6');
+      expect(html).toContain('Sonnet 4.6');
       expect(html).toContain('Sonnet 4.5');
       expect(html).toContain('Haiku 4.5');
     });

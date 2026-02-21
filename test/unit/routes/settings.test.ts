@@ -60,7 +60,7 @@ describe('SettingsRouter', () => {
       }
     });
 
-    it('should include sonnet model', async () => {
+    it('should include opus model', async () => {
       const response = await request(app).get('/settings/models');
 
       expect(response.status).toBe(200);
@@ -69,6 +69,18 @@ describe('SettingsRouter', () => {
       );
       expect(opusModel).toBeDefined();
       expect(opusModel.displayName).toBe('Claude Opus 4.6');
+    });
+
+
+    it('should include sonnet 4.6 model', async () => {
+      const response = await request(app).get('/settings/models');
+
+      expect(response.status).toBe(200);
+      const sonnetModel = response.body.models.find(
+        (m: { id: string }) => m.id === 'claude-sonnet-4-6'
+      );
+      expect(sonnetModel).toBeDefined();
+      expect(sonnetModel.displayName).toBe('Claude Sonnet 4.6');
     });
 
     it('should include sonnet model', async () => {
